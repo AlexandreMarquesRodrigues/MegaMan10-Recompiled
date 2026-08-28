@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/MegaMan 10 Recomp BANNER.png" alt="Mega Man 10 Recompiled" width="500">
+  <img src="assets/MegaMan 10 Recomp BANNER.png" alt="Mega Man 10 Recompiled" width="1000">
 </p>
 
 # Mega Man 10 Recompiled
