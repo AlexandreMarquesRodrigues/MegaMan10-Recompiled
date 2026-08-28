@@ -16,7 +16,7 @@ The project is currently in the research and reverse-engineering stage.
 
 - [x] Original game files obtained
 - [x] Ghidra environment configured
-- [ ] Analyze main.dol
+- [x] Analyze main.dol
 - [ ] Identify game initialization
 - [ ] Identify rendering systems
 - [ ] Identify input systems
@@ -32,6 +32,9 @@ The project is currently in the research and reverse-engineering stage.
 - Created the project repository.
 - Started analyzing the Wii executable (`main.dol`) using Ghidra.
 - Began investigating the game's PowerPC code and executable structure.
+- Configured the development environment in **VS Code** using **CMake** and the **Visual Studio (MSVC)** compiler.
+- Integrated the **SDL3** library into the project via automated configuration in `CMakeLists.txt` for native PC window management and input handling.
+- Established the initial file structure (`main.cpp`, `input_manager.cpp`, and `input_manager.h`) for controller mapping.
 
 ## Goals
 
