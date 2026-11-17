@@ -32,9 +32,11 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel 4
 ```
 
-## First boot attempt
+## Marco 5: first hardware I/O
 
 Run from the repository root so the executable can open `private/main.dol`:
+
+Successful commands for this milestone:
 
 ```powershell
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -42,7 +44,19 @@ cmake --build build --parallel 4
 .\build\mm10.exe
 ```
 
-The first run stops at the unsupported `HID2` SPR read in `PPCMfhid2`
-(`0x80136c30`), called from `__OSPSInit` (`0x80138200`). This is the expected
-first hardware interface requiring HLE; this milestone intentionally stops
-there.
+The executable exits nonzero at the deliberate guest stop. Ordered stops and
+the change made before the next run:
+
+1. `HID2` read at `0x80136c30`, `PPCMfhid2`, LR `0x80138210` in `__OSPSInit`.
+   Added host SPR state; zero HID2 reset value lets SDK initialization proceed.
+2. Indirect call to `0x8015fd0c` in `OSExceptionInit`. This is the interior
+   entry `__save_gpr+0x18`, used to save r20-r31. Added suffix handling for the
+   CodeWarrior save/restore GPR and FPR thunks.
+3. First hardware I/O: write to `0xCC003004` in `__fill_mem` (`0x80004600`),
+   called by `__OSInterruptInit` (`0x8013dea0`), LR `0x8013ded0`. The run stops
+   here before emulating any MMIO device.
+
+Low memory is initialized with game ID `WRXE`, retail board type, MEM1/MEM2
+sizes, memory arena bounds, and Wii bus/CPU clocks. In the observed startup,
+`__start` also reads `0x800000f4` and `0x80000034` to check for optional
+apploader callbacks; both remain zero for this direct DOL entry.

@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 project(mm10_recomp C)
 
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
@@ -15,7 +17,16 @@ add_library(mm10_generated STATIC
     ${GENERATED_FUNCTIONS}
 )
 
-add_executable(mm10 runtime/runtime.c)
+set(FUNCTION_NAMES_C "${CMAKE_CURRENT_BINARY_DIR}/function_names.generated.c")
+add_custom_command(
+    OUTPUT "${FUNCTION_NAMES_C}"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_function_names.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/games/megaman10/func_list.json" "${FUNCTION_NAMES_C}"
+    DEPENDS tools/gen_function_names.py games/megaman10/func_list.json
+    VERBATIM
+)
+
+add_executable(mm10 runtime/runtime.c "${FUNCTION_NAMES_C}")
 target_include_directories(mm10 PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/runtime/src/generated"
