@@ -4,8 +4,8 @@ project(mm10_recomp C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-# This target checks that the translated C compiles. It deliberately creates
-# a static library and does not link or execute a game.
+# Generated translation is kept as a library for compile validation and linked
+# into the first host executable below.
 file(GLOB GENERATED_FUNCTIONS CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/runtime/src/generated/funcs_*.c")
 
@@ -15,10 +15,21 @@ add_library(mm10_generated STATIC
     ${GENERATED_FUNCTIONS}
 )
 
+add_executable(mm10 runtime/runtime.c)
+target_include_directories(mm10 PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/runtime/src/generated"
+)
+target_link_libraries(mm10 PRIVATE mm10_generated)
+if(NOT MSVC)
+    target_link_libraries(mm10 PRIVATE m)
+endif()
+
 target_include_directories(mm10_generated PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/runtime/src/generated"
 )
+target_compile_definitions(mm10_generated PRIVATE PPC_TRACE_ALL=1)
 
 if(MSVC)
     target_compile_options(mm10_generated PRIVATE /W0)
