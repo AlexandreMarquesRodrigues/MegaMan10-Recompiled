@@ -35,7 +35,7 @@ static uint64_t g_same_mmio_read_count;
 static uint8_t g_mmio_cc[MMIO_CC_SIZE];
 static uint8_t g_mmio_cd[MMIO_CD_SIZE];
 typedef struct {
-    uint32_t addr, lr, function;
+    uint32_t addr, first_lr, first_function, lr, function;
     uint64_t first_value, reads, writes;
     uint8_t first_is_write, used;
 } MMIORecord;
@@ -128,7 +128,12 @@ static void check_watchdog(void) {
 static void record_mmio(uint32_t va, int write, uint64_t value) {
     MMIORecord *r = mmio_record(va);
     if (!r) { fatal_guest(va, "MMIO telemetry table full"); return; }
-    if (r->reads + r->writes == 0) { r->first_value = value; r->first_is_write = (uint8_t)write; }
+    if (r->reads + r->writes == 0) {
+        r->first_value = value;
+        r->first_is_write = (uint8_t)write;
+        r->first_lr = g_cpu.lr;
+        r->first_function = g_current_guest_function;
+    }
     if (write) { ++r->writes; g_same_mmio_read_count = 0; }
     else {
         ++r->reads;
@@ -157,11 +162,12 @@ static void dump_mmio_telemetry(void) {
     fprintf(stderr, "  distinct MMIO addresses:\n");
     for (unsigned i = 0; i < MMIO_RECORDS; ++i) if (g_mmio_records[i].used) {
         MMIORecord *r = &g_mmio_records[i];
-        fprintf(stderr, "    %-3s %08x first=%c:%016llx count=%llu (R=%llu W=%llu) LR=%08x function~%s@%08x\n",
+        fprintf(stderr, "    %-3s %08x first=%c:%016llx count=%llu (R=%llu W=%llu) first_LR=%08x function~%s@%08x last_LR=%08x last_function~%s@%08x\n",
                 g_mmio_block_names[mmio_block(r->addr)], r->addr,
                 r->first_is_write ? 'W' : 'R', (unsigned long long)r->first_value,
                 (unsigned long long)(r->reads+r->writes), (unsigned long long)r->reads,
-                (unsigned long long)r->writes, r->lr, function_name(r->function), r->function);
+                (unsigned long long)r->writes, r->first_lr, function_name(r->first_function),
+                r->first_function, r->lr, function_name(r->function), r->function);
     }
 }
 

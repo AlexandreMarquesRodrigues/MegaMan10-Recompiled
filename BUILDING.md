@@ -63,8 +63,9 @@ the change made before the next run:
 The runtime keeps byte-addressed shadows for `0xCC000000–0xCC00FFFF` and
 `0xCD000000–0xCD8FFFFF`. Reads return the last bytes written (zero initially);
 there is no device behavior. It reports per-address access counts, first value,
-LR, probable function and block totals. A repeated read of one address stops
-after 100,000 consecutive reads, and the boot watchdog stops after 10 seconds.
+first and last LR/function contexts, and block totals. A repeated read of one
+address stops after 100,000 consecutive reads; the boot watchdog stops after
+10 seconds.
 
 Disassemble a DOL text range by mapping its VA through the DOL text-section
 header, extracting those bytes, then forcing big-endian PPC mode:
