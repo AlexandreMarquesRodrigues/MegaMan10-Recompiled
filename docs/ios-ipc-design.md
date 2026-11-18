@@ -62,7 +62,7 @@ runtime currently has no IPC device response model.
    model.
 2. Trace which IOS device and command the boot-time AI clock handshake expects
    and model its reply fields and error path.
-3. Determine which DVD request completion event owns the null SDK callback
-   slot at `0x8067B7E8`; then deliver that event through the interrupt-safe
-   queue above. The current DOL has no initialized value for the slot because
-   it is in BSS.
+3. The slot at `0x8067B7E8` is initialized in data6 to `0x80146290`, then
+   cleared by `ClearMEM2Arena` through `DCZeroRange` before `DVDInit`. Determine
+   why the MEM2 arena clear range includes loaded data6 before designing DVD
+   completion delivery; the slot is not initially empty in the DOL.

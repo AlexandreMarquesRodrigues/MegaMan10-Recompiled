@@ -334,10 +334,9 @@ functions are, oldest first: `OSInitThreadQueue`, `DVDLowUnmaskStatusInterrupts`
 
 At the stop, `r13=0x80680C40`; the load at `0x80149820` is
 `lwz r12,-0x5458(r13)`, so the callback slot is `r13-0x5458 = 0x8067B7E8`.
-This is inside the DOL BSS range `0x80352180..0x8067E994` (exclusive upper
-bound). BSS has no corresponding initialized bytes in the DOL file; its
-specified initial value is zero. The effective slot value at the stop is
-`0x00000000`. The DOL sequence at the end of the dispatcher is:
+Marco 12 corrects the earlier section identification: this address is inside
+data6, not BSS. The effective slot value at the stop is `0x00000000`. The DOL
+sequence at the end of the dispatcher is:
 
 ```text
 80149820  lwz   r12,-0x5458(r13)
@@ -359,16 +358,84 @@ disabled/restored locally while the request is queued; it is not an IOS IPC
 interrupt handler or a DVD completion interrupt handler. The request's
 completion/dispatch still depends on the DVD device path.
 
-Search of all translated generated C finds one read of `r13-0x5458` at
-`0x80149820` and no stores to that slot. `DVDInit` initializes other DVD SDA
-state, but does not fill this hook. No MMIO shadow status bit or loader
-section-overwrite error explains this zero. Classification: (b), the
-asynchronous DVD operation reaches a callback dispatch without a modeled DVD
-completion/registration path. No register shadows were changed and no DVD HLE
-was added. The proposed interrupt-safe IOS/IPC and device response design is
-in [docs/ios-ipc-design.md](docs/ios-ipc-design.md).
+Marco 12 found an SDK store and supersedes the earlier “no stores/BSS”
+conclusion. See the Marco 12 section for exact source bytes, runtime snapshots,
+the `ClearMEM2Arena`/`DCZeroRange` writer, and the static scan. The proposed
+interrupt-safe IOS/IPC and device response design remains in
+[docs/ios-ipc-design.md](docs/ios-ipc-design.md).
 
 Final Marco 11 stop: target `0x00000000`, call site `0x80149834`,
 `fn_801492A0` (SDK name unconfirmed), LR `0x80149838`. No later iteration was
-run because this is the (b) boundary and the requested action is documentation
-only.
+run because at that time it was classified as the (b) device boundary. Marco
+12 corrected that classification after finding the preceding `ClearMEM2Arena`
+write.
+
+## Marco 12: prove the callback slot writer
+
+The slot is `r13-0x5458 = 0x8067B7E8`. It lies in DOL data6
+`0x80678C40..0x8067C9E0`, at section offset `0x2BA8` and DOL file offset
+`0x350E08`. The 16 file bytes at `0x350E00..0x350E0F` are
+`80 32 1D 18 00 00 00 01 80 14 62 90 64 76 64 2E`; the initialized slot word
+is `0x80146290`. That value resolves to `fn_80146290`, a one-instruction
+`blr` stub in the DOL.
+
+With `MM10_WATCH=ON`, the three 16-byte snapshots (`addr=0x8067B7E0`) were:
+
+| Phase | Bytes | Slot |
+| --- | --- | --- |
+| Immediately after DOL load | `80 32 1D 18 00 00 00 01 80 14 62 90 64 76 64 2E` | `0x80146290` |
+| Entry to `DVDInit` (`0x801462A0`) | `00` × 16 | `0x00000000` |
+| Null-call stop | `00` × 16 | `0x00000000` |
+
+The watchpoint logged all overlapping writes. The BSS clear initially zeroes
+the broad BSS span, then the data6 copy restores `0x80146290`. After boot
+starts, one translated guest write touches the slot:
+
+```text
+MM10_WATCH_WRITE va=8067b7e8 size=4 overlap=8067b7e8 bytes=00000000
+  LR=80137428 function=DCZeroRange@801394d0 r3=8067b7ff r4=04a00001
+```
+
+`0x80137428` is the return address after the call at `0x80137424` in
+`ClearMEM2Arena` (`0x801373D0`). Its code reads `OSGetMEM2ArenaHi` and
+`OSGetMEM2ArenaLo`, computes the range, then calls `DCZeroRange` at
+`0x801394D0`; that helper executes `dcbz` at `0x801394EC`. The cache line
+`0x8067B7E0..0x8067B7FF` therefore zeroes the initialized data6 callback slot.
+The `DCZeroRange` event occurred before the `DVDInit` entry snapshot.
+
+The static raw-DOL scan is `tools/find_writes.py`; its full output is
+`build/marco12-static.txt`. It finds no immediate effective-address store
+formed from the observed `r13`, `lis/addis` plus displacement, or a loaded
+`0x80680000` base that resolves exactly to the slot. It identifies the
+parameter-based `dcbz` sites; the relevant one is
+`0x801394EC DCZeroRange`, called by `ClearMEM2Arena` at `0x80137424`. The other
+unresolved `dcbz` sites are in `fn_80294404` (`0x80294528`, `0x8029458C`,
+`0x80294630`, `0x802946D4`) and `fn_802947C4` (`0x80294844`, `0x80294858`);
+the runtime watchpoint shows they did not touch this slot in this run.
+
+Direct call xrefs in the DOL: `fn_801492A0` is called by
+`fn_80147F60` (`0x8014808C`), `fn_80148440` (`0x801484C4`),
+`fn_80148510` (`0x8014869C`), `fn_80148920` (`0x80148A7C`),
+`fn_80148B60` (`0x80148C14`), `fn_80148F80` (`0x8014927C`), and twice by
+`fn_80149850` (`0x80149EE8`, `0x80149F8C`). `DVDInquiryAsync` is called by
+`OSInit` (`0x80137D5C`). `OSInit` also calls `DVDInit` (`0x80137D0C`) and
+`IPCCltInit` (`0x80137B90`). The complete 105-callsite list of callers outside
+the DVD/IPC/IOS/NAND/ES SDK module ranges is in `build/marco12-static.txt`.
+It includes `SCInit`/`SCReloadConfFileAsync` paths into NAND, OS/system paths
+into ES, plus title functions calling IOS services; this DOL uses DVD as well
+as NAND/ES/IOS, not only NAND/ES.
+
+Classification: (c), other. `ClearMEM2Arena` did execute and its translated
+`DCZeroRange` cleared an address in loaded data6. The writer was not absent or
+replaced by an EXI/audio HLE, so no fix was made under the requested rule.
+The repeated stop remains target `0x00000000`, `fn_801492A0`, LR
+`0x80149838`, indirect call site `0x80149834`.
+
+Commands that worked:
+
+```powershell
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DMM10_WATCH=ON
+cmake --build build --parallel 4
+.\build\mm10.exe 2>&1 | Tee-Object -FilePath build\marco12-watch-run-02.log
+python tools/find_writes.py 'C:\Projetos\MegaMan10-Recomp\decomp\dtk-template-main\orig\WRXE\main.dol' games\megaman10\func_list.json --output build\marco12-static.txt
+```

@@ -83,6 +83,29 @@ static const char *function_name(uint32_t addr) {
     return fallback;
 }
 
+#ifdef MM10_WATCH
+#define DVD_CB_SLOT 0x8067b7e8u
+static void watch_snapshot(const char *phase) {
+    uint8_t *p = (uint8_t *)ppc_host_ptr(DVD_CB_SLOT - 8u);
+    fprintf(stderr, "MM10_WATCH_SNAPSHOT %s addr=%08x bytes=", phase, DVD_CB_SLOT - 8u);
+    for (unsigned i = 0; i < 16; ++i) fprintf(stderr, "%02x", p[i]);
+    fprintf(stderr, " slot=%08x\n", MEM_R32(DVD_CB_SLOT));
+}
+void ppc_watch_write(uint32_t va, const void *bytes, uint32_t nbytes) {
+    uint64_t end = (uint64_t)va + nbytes;
+    uint64_t slot_end = (uint64_t)DVD_CB_SLOT + 4u;
+    if (!nbytes || (uint64_t)va >= slot_end || end <= DVD_CB_SLOT) return;
+    const uint8_t *src = (const uint8_t *)bytes;
+    uint32_t lo = va > DVD_CB_SLOT ? va : DVD_CB_SLOT;
+    uint32_t hi = end < slot_end ? (uint32_t)end : (uint32_t)slot_end;
+    fprintf(stderr, "MM10_WATCH_WRITE va=%08x size=%u overlap=%08x bytes=", va, nbytes, lo);
+    for (uint32_t a = lo; a < hi; ++a) fprintf(stderr, "%02x", src[a - va]);
+    fprintf(stderr, " LR=%08x function=%s@%08x r3=%08x r4=%08x\n", g_cpu.lr,
+            function_name(g_current_guest_function), g_current_guest_function,
+            g_cpu.gpr[3], g_cpu.gpr[4]);
+}
+#endif
+
 static uint8_t *mmio_shadow_ptr(uint32_t va) {
     if (va >= MMIO_CC_BASE && va < MMIO_CC_BASE + MMIO_CC_SIZE) return g_mmio_cc + (va - MMIO_CC_BASE);
     if (va >= MMIO_CD_BASE && va < MMIO_CD_BASE + MMIO_CD_SIZE) return g_mmio_cd + (va - MMIO_CD_BASE);
@@ -321,6 +344,9 @@ static void copy_dol_span(FILE *f, uint32_t file_off, uint32_t va, uint32_t size
     if (fseek(f, (long)file_off, SEEK_SET) || fread(dst, 1, size, f) != size) {
         fprintf(stderr, "DOL read failed at file offset %08x\n", file_off); exit(2);
     }
+#ifdef MM10_WATCH
+    ppc_watch_write(va, dst, size);
+#endif
 }
 
 static uint32_t load_dol(const char *path) {
@@ -336,6 +362,9 @@ static uint32_t load_dol(const char *path) {
         void *dst = ppc_host_ptr(bss);
         if (dst == g_deadzone || (uint64_t)bss + bss_size > 0x100000000ull) { fprintf(stderr, "DOL BSS outside guest RAM\n"); exit(2); }
         memset(dst, 0, bss_size);
+#ifdef MM10_WATCH
+        ppc_watch_write(bss, dst, bss_size);
+#endif
         if (bss >= PPC_MEM1_BASE && bss < PPC_MEM1_BASE + PPC_MEM1_SIZE && bss + bss_size > max_mem1) max_mem1 = bss + bss_size;
     }
     if (audit) audit_dol_data(f, h, "after_bss_before_copy");
@@ -353,10 +382,16 @@ static uint32_t load_dol(const char *path) {
     if (audit) audit_dol_data(f, h, "after_copy");
     fclose(f);
     g_loaded_mem1_top = max_mem1;
+#ifdef MM10_WATCH
+    watch_snapshot("after_dol_load");
+#endif
     return read_be32(h + 0xe0);
 }
 
 static void fatal_guest(uint32_t addr, const char *why) {
+#ifdef MM10_WATCH
+    watch_snapshot("stop");
+#endif
     size_t i;
     uint32_t fault_fn = ppc_lookup_func(addr) ? addr : g_current_guest_function;
     fprintf(stderr, "\nGUEST STOP: %s at %08x\n", why, addr);
@@ -443,6 +478,9 @@ void ppc_trace(uint32_t pc) {
     g_trace_ring[g_trace_next] = pc;
     g_trace_next = (g_trace_next + 1u) % 512u;
     if (g_trace_count < 512u) ++g_trace_count;
+#ifdef MM10_WATCH
+    if (pc == 0x801462a0u) watch_snapshot("DVDInit_entry");
+#endif
     check_watchdog();
 }
 void ppc_dbg_mark(const char *tag) { fprintf(stderr, "guest mark: %s\n", tag ? tag : "(null)"); }

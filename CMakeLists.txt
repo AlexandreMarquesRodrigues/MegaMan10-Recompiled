@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 project(mm10_recomp C)
 
+option(MM10_WATCH "Trace writes covering the DVD dispatcher callback slot" OFF)
+
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 set(CMAKE_C_STANDARD 11)
@@ -41,6 +43,10 @@ target_include_directories(mm10_generated PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/runtime/src/generated"
 )
 target_compile_definitions(mm10_generated PRIVATE PPC_TRACE_ALL=1)
+if(MM10_WATCH)
+    target_compile_definitions(mm10 PRIVATE MM10_WATCH=1)
+    target_compile_definitions(mm10_generated PRIVATE MM10_WATCH=1)
+endif()
 
 if(MSVC)
     target_compile_options(mm10_generated PRIVATE /W0)

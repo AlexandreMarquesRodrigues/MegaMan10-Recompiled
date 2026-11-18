@@ -100,24 +100,39 @@ static inline uint64_t MEM_R64(uint32_t va) {
 void ppc_mmio_write(uint32_t va, const void *data, int nbytes);
 uint64_t ppc_mmio_read(uint32_t va, int nbytes);
 bool ppc_mmio_va(uint32_t va);            // true if the VA is MMIO, not RAM
+#ifdef MM10_WATCH
+void ppc_watch_write(uint32_t va, const void *bytes, uint32_t nbytes);
+#endif
 
 static inline void MEM_W8(uint32_t va, uint8_t v) {
     if (ppc_mmio_va(va)) { ppc_mmio_write(va, &v, 1); return; }
+#ifdef MM10_WATCH
+    ppc_watch_write(va, &v, 1);
+#endif
     *(uint8_t *)ppc_host_ptr(va) = v;
 }
 static inline void MEM_W16(uint32_t va, uint16_t v) {
     uint16_t be = _ppc_bswap16(v);
     if (ppc_mmio_va(va)) { ppc_mmio_write(va, &be, 2); return; }
+#ifdef MM10_WATCH
+    ppc_watch_write(va, &be, 2);
+#endif
     __builtin_memcpy(ppc_host_ptr(va), &be, 2);
 }
 static inline void MEM_W32(uint32_t va, uint32_t v) {
     uint32_t be = _ppc_bswap32(v);
     if (ppc_mmio_va(va)) { ppc_mmio_write(va, &be, 4); return; }
+#ifdef MM10_WATCH
+    ppc_watch_write(va, &be, 4);
+#endif
     __builtin_memcpy(ppc_host_ptr(va), &be, 4);
 }
 static inline void MEM_W64(uint32_t va, uint64_t v) {
     uint64_t be = _ppc_bswap64(v);
     if (ppc_mmio_va(va)) { ppc_mmio_write(va, &be, 8); return; }
+#ifdef MM10_WATCH
+    ppc_watch_write(va, &be, 8);
+#endif
     __builtin_memcpy(ppc_host_ptr(va), &be, 8);
 }
 
