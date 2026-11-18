@@ -1,3 +1,6 @@
 private/
 runtime/src/generated/
 build/
+
+.translation-input/
+*.dol
