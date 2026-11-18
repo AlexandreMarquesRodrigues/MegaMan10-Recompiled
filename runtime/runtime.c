@@ -40,6 +40,9 @@ typedef struct {
     uint8_t first_is_write, used;
 } MMIORecord;
 static MMIORecord g_mmio_records[MMIO_RECORDS];
+typedef struct { uint32_t addr, lr, function; uint64_t value; uint8_t write; } MMIOEvent;
+static MMIOEvent g_mmio_recent[20];
+static size_t g_mmio_recent_next, g_mmio_recent_count;
 
 extern const char *ppc_function_name(uint32_t addr);
 static void fatal_guest(uint32_t addr, const char *why);
@@ -126,6 +129,11 @@ static void check_watchdog(void) {
 }
 
 static void record_mmio(uint32_t va, int write, uint64_t value) {
+    MMIOEvent *event = &g_mmio_recent[g_mmio_recent_next];
+    event->addr = va; event->lr = g_cpu.lr; event->function = g_current_guest_function;
+    event->value = value; event->write = (uint8_t)write;
+    g_mmio_recent_next = (g_mmio_recent_next + 1u) % 20u;
+    if (g_mmio_recent_count < 20u) ++g_mmio_recent_count;
     MMIORecord *r = mmio_record(va);
     if (!r) { fatal_guest(va, "MMIO telemetry table full"); return; }
     if (r->reads + r->writes == 0) {
@@ -150,6 +158,13 @@ static void dump_mmio_telemetry(void) {
     uint64_t reads[10] = {0}, writes[10] = {0};
     unsigned distinct[10] = {0};
     fprintf(stderr, "MMIO shadow telemetry (no device behavior):\n");
+    fprintf(stderr, "last %zu MMIO accesses (oldest to newest):\n", g_mmio_recent_count);
+    for (size_t j = 0; j < g_mmio_recent_count; ++j) {
+        MMIOEvent *e = &g_mmio_recent[(g_mmio_recent_next + 20u - g_mmio_recent_count + j) % 20u];
+        fprintf(stderr, "  %08x %c %016llx LR=%08x function~%s@%08x\n", e->addr,
+                e->write ? 'W' : 'R', (unsigned long long)e->value, e->lr,
+                function_name(e->function), e->function);
+    }
     for (unsigned i = 0; i < MMIO_RECORDS; ++i) if (g_mmio_records[i].used) {
         MMIORecord *r = &g_mmio_records[i];
         unsigned b = mmio_block(r->addr);

@@ -312,3 +312,63 @@ function `fn_801492A0` (generic label, not a confirmed SDK name), LR
 preceding callback load; the label is not misidentified as a named DVD SDK
 routine. The runtime trace stopped after one iteration at this stateful DVD
 callback path, within the requested 12-iteration limit.
+
+## Marco 11: null DVD dispatcher callback diagnosis
+
+The reproduction command was `cmake --build build --parallel 4`, followed by
+`.\build\mm10.exe 2>&1 | Tee-Object -FilePath build\marco11-run-01.log`.
+Ninja completed successfully. The stop remains at the null indirect call at
+`0x80149834`, with LR `0x80149838`, in `fn_801492A0`. `func_list.json` and the
+DOL identify the function address, but provide no confirmed SDK symbol name.
+
+The runtime now keeps a rolling log of the last 20 MMIO operations. The
+reproduction's complete list and the last 16 distinct functions are in
+`build/marco11-run-01.log`. The last MMIO operation is `CC003024` read as zero
+at LR `0x801373E8`, attributed by the trace to `OSGetResetCode`; there are no
+DI (`CC006000`) or DVD MMIO accesses before this stop. The final 16 distinct
+functions are, oldest first: `OSInitThreadQueue`, `DVDLowUnmaskStatusInterrupts`,
+`DVDLowMaskCoverInterrupt`, `memset`, `__fill_mem`, `memcpy`,
+`DVDSetAutoFatalMessaging`, `DCInvalidateRange`, `DVDInquiryAsync`,
+`fn_8014AE40`, `fn_80148F80`, `fn_8014AF50`, `fn_8014AEB0`,
+`OSDisableInterrupts`, `OSRestoreInterrupts`, `fn_801492A0`.
+
+At the stop, `r13=0x80680C40`; the load at `0x80149820` is
+`lwz r12,-0x5458(r13)`, so the callback slot is `r13-0x5458 = 0x8067B7E8`.
+This is inside the DOL BSS range `0x80352180..0x8067E994` (exclusive upper
+bound). BSS has no corresponding initialized bytes in the DOL file; its
+specified initial value is zero. The effective slot value at the stop is
+`0x00000000`. The DOL sequence at the end of the dispatcher is:
+
+```text
+80149820  lwz   r12,-0x5458(r13)
+80149824  lis   r4,-0x7feb
+80149828  mr    r3,r29
+8014982c  addi  r4,r4,-0x67b0
+80149830  mtctr r12
+80149834  bctrl
+```
+
+The full DOL disassembly from function entry through `bctrl` is saved in
+`build/marco11-fn_801492A0.disasm.txt`; the extracted bytes are in
+`build/marco11-fn_801492A0.bin`. The translated version is
+`runtime/src/generated/funcs_0016_80143d70.c`.
+`fn_801492A0` reads a request command at `+8`, dispatches known command cases,
+and reaches the global hook for the inquiry command. The trace shows this is
+entered through the normal `DVDInquiryAsync` request path, with interrupts
+disabled/restored locally while the request is queued; it is not an IOS IPC
+interrupt handler or a DVD completion interrupt handler. The request's
+completion/dispatch still depends on the DVD device path.
+
+Search of all translated generated C finds one read of `r13-0x5458` at
+`0x80149820` and no stores to that slot. `DVDInit` initializes other DVD SDA
+state, but does not fill this hook. No MMIO shadow status bit or loader
+section-overwrite error explains this zero. Classification: (b), the
+asynchronous DVD operation reaches a callback dispatch without a modeled DVD
+completion/registration path. No register shadows were changed and no DVD HLE
+was added. The proposed interrupt-safe IOS/IPC and device response design is
+in [docs/ios-ipc-design.md](docs/ios-ipc-design.md).
+
+Final Marco 11 stop: target `0x00000000`, call site `0x80149834`,
+`fn_801492A0` (SDK name unconfirmed), LR `0x80149838`. No later iteration was
+run because this is the (b) boundary and the requested action is documentation
+only.
