@@ -58,3 +58,7 @@ The long-term goal is to create a native PC version of Mega Man 10 while preserv
 This is a fan-made research and preservation project.
 
 No original game ROMs, copyrighted assets, or other proprietary game files are distributed by this repository.
+
+## License
+
+GPL-2.0, see [LICENSE](LICENSE). Parts of the runtime derive from [WiiRecomp](https://github.com/Eggscantfly/WiiRecomp) (GPLv2), and the design takes [Robox Recompiled](https://github.com/Eggscantfly/robox-recompiled) (GPL-2.0-or-later) as a reference.
