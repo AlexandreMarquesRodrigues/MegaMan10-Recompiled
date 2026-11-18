@@ -78,20 +78,27 @@ static inline uint64_t _ppc_bswap64(uint64_t x) {
          | (uint64_t)_ppc_bswap32((uint32_t)(x >> 32));
 }
 
-static inline uint8_t  MEM_R8 (uint32_t va) { return *(uint8_t *)ppc_host_ptr(va); }
+bool ppc_mmio_va(uint32_t va);
+uint64_t ppc_mmio_read(uint32_t va, int nbytes);
+
+static inline uint8_t  MEM_R8 (uint32_t va) { if (ppc_mmio_va(va)) return (uint8_t)ppc_mmio_read(va, 1); return *(uint8_t *)ppc_host_ptr(va); }
 static inline uint16_t MEM_R16(uint32_t va) {
+    if (ppc_mmio_va(va)) return (uint16_t)ppc_mmio_read(va, 2);
     uint16_t v; __builtin_memcpy(&v, ppc_host_ptr(va), 2); return _ppc_bswap16(v);
 }
 static inline uint32_t MEM_R32(uint32_t va) {
+    if (ppc_mmio_va(va)) return (uint32_t)ppc_mmio_read(va, 4);
     uint32_t v; __builtin_memcpy(&v, ppc_host_ptr(va), 4); return _ppc_bswap32(v);
 }
 static inline uint64_t MEM_R64(uint32_t va) {
+    if (ppc_mmio_va(va)) return ppc_mmio_read(va, 8);
     uint64_t v; __builtin_memcpy(&v, ppc_host_ptr(va), 8); return _ppc_bswap64(v);
 }
 
 // MMIO hook. Writes into CP-FIFO / GX register VAs get forwarded into the
 // FIFO interpreter in sdk/peripherals.c instead of touching guest memory.
 void ppc_mmio_write(uint32_t va, const void *data, int nbytes);
+uint64_t ppc_mmio_read(uint32_t va, int nbytes);
 bool ppc_mmio_va(uint32_t va);            // true if the VA is MMIO, not RAM
 
 static inline void MEM_W8(uint32_t va, uint8_t v) {
@@ -110,6 +117,7 @@ static inline void MEM_W32(uint32_t va, uint32_t v) {
 }
 static inline void MEM_W64(uint32_t va, uint64_t v) {
     uint64_t be = _ppc_bswap64(v);
+    if (ppc_mmio_va(va)) { ppc_mmio_write(va, &be, 8); return; }
     __builtin_memcpy(ppc_host_ptr(va), &be, 8);
 }
 

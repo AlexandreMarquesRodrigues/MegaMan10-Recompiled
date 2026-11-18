@@ -4,6 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 PPCContext g_cpu;
 uint8_t *g_mem1;
@@ -16,6 +19,27 @@ static size_t g_guest_stack_depth;
 static uint32_t g_current_guest_function;
 static clock_t g_clock_epoch;
 static int g_clock_started;
+static uint32_t g_trace_ring[512];
+static size_t g_trace_next, g_trace_count;
+static int g_boot_active;
+static clock_t g_boot_clock_start;
+static uint64_t g_boot_wall_start;
+static uint32_t g_last_mmio_read;
+static uint64_t g_same_mmio_read_count;
+
+#define MMIO_CC_BASE 0xcc000000u
+#define MMIO_CC_SIZE 0x00010000u
+#define MMIO_CD_BASE 0xcd000000u
+#define MMIO_CD_SIZE 0x00900000u
+#define MMIO_RECORDS 16384u
+static uint8_t g_mmio_cc[MMIO_CC_SIZE];
+static uint8_t g_mmio_cd[MMIO_CD_SIZE];
+typedef struct {
+    uint32_t addr, lr, function;
+    uint64_t first_value, reads, writes;
+    uint8_t first_is_write, used;
+} MMIORecord;
+static MMIORecord g_mmio_records[MMIO_RECORDS];
 
 extern const char *ppc_function_name(uint32_t addr);
 static void fatal_guest(uint32_t addr, const char *why);
@@ -54,6 +78,105 @@ static const char *function_name(uint32_t addr) {
     if (name) return name;
     snprintf(fallback, sizeof(fallback), "fn_%08X", addr);
     return fallback;
+}
+
+static uint8_t *mmio_shadow_ptr(uint32_t va) {
+    if (va >= MMIO_CC_BASE && va < MMIO_CC_BASE + MMIO_CC_SIZE) return g_mmio_cc + (va - MMIO_CC_BASE);
+    if (va >= MMIO_CD_BASE && va < MMIO_CD_BASE + MMIO_CD_SIZE) return g_mmio_cd + (va - MMIO_CD_BASE);
+    return NULL;
+}
+
+static unsigned mmio_block(uint32_t va) {
+    /* Wii maps the Flipper-style offsets in the CD Hollywood window too;
+       e.g. CD00680C is EXI channel-0 control, not an IPC register. */
+    if ((va >= MMIO_CD_BASE + 0x6000u && va < MMIO_CD_BASE + 0x7000u))
+        va = 0xcc000000u | (va & 0xffffu);
+    if (va >= 0xcc002000u && va < 0xcc003000u) return 0; /* VI */
+    if (va >= 0xcc003000u && va < 0xcc004000u) return 1; /* PI */
+    if (va >= 0xcc004000u && va < 0xcc005000u) return 2; /* MI */
+    if (va >= 0xcc005000u && va < 0xcc006000u) return 3; /* DSP */
+    if (va >= 0xcc006000u && va < 0xcc006400u) return 4; /* DI */
+    if (va >= 0xcc006400u && va < 0xcc006800u) return 5; /* SI */
+    if (va >= 0xcc006800u && va < 0xcc006c00u) return 6; /* EXI */
+    if (va >= 0xcc006c00u && va < 0xcc007000u) return 7; /* AI */
+    if (va >= MMIO_CD_BASE && va < MMIO_CD_BASE + MMIO_CD_SIZE) return 8; /* IOS/Hollywood IPC window */
+    return 9;
+}
+
+static const char *const g_mmio_block_names[] = {"VI","PI","MI","DSP","DI","SI","EXI","AI","IPC","other"};
+
+static MMIORecord *mmio_record(uint32_t va) {
+    uint32_t slot = (va * 2654435761u) & (MMIO_RECORDS - 1u);
+    for (uint32_t n = 0; n < MMIO_RECORDS; ++n) {
+        MMIORecord *r = &g_mmio_records[(slot + n) & (MMIO_RECORDS - 1u)];
+        if (!r->used) { r->used = 1; r->addr = va; return r; }
+        if (r->addr == va) return r;
+    }
+    return NULL;
+}
+
+static void check_watchdog(void) {
+    if (!g_boot_active) return;
+#ifdef _WIN32
+    if (GetTickCount64() >= g_boot_wall_start + 10000ull)
+#else
+    if ((uint64_t)(clock() - g_boot_clock_start) * 1000ull >= (uint64_t)CLOCKS_PER_SEC * 10000ull)
+#endif
+        fatal_guest(g_current_guest_function, "boot watchdog: execution exceeded 10 seconds");
+}
+
+static void record_mmio(uint32_t va, int write, uint64_t value) {
+    MMIORecord *r = mmio_record(va);
+    if (!r) { fatal_guest(va, "MMIO telemetry table full"); return; }
+    if (r->reads + r->writes == 0) { r->first_value = value; r->first_is_write = (uint8_t)write; }
+    if (write) { ++r->writes; g_same_mmio_read_count = 0; }
+    else {
+        ++r->reads;
+        if (g_same_mmio_read_count && g_last_mmio_read == va) ++g_same_mmio_read_count;
+        else { g_last_mmio_read = va; g_same_mmio_read_count = 1; }
+    }
+    r->lr = g_cpu.lr;
+    r->function = g_current_guest_function;
+    if (g_same_mmio_read_count > 100000ull)
+        fatal_guest(va, "MMIO wait loop: same address read more than 100000 times consecutively");
+}
+
+static void dump_mmio_telemetry(void) {
+    uint64_t reads[10] = {0}, writes[10] = {0};
+    unsigned distinct[10] = {0};
+    fprintf(stderr, "MMIO shadow telemetry (no device behavior):\n");
+    for (unsigned i = 0; i < MMIO_RECORDS; ++i) if (g_mmio_records[i].used) {
+        MMIORecord *r = &g_mmio_records[i];
+        unsigned b = mmio_block(r->addr);
+        reads[b] += r->reads; writes[b] += r->writes; ++distinct[b];
+    }
+    fprintf(stderr, "  block  distinct   reads   writes\n");
+    for (unsigned b = 0; b < 9; ++b)
+        fprintf(stderr, "  %-5s  %8u %7llu %8llu\n", g_mmio_block_names[b], distinct[b],
+                (unsigned long long)reads[b], (unsigned long long)writes[b]);
+    fprintf(stderr, "  distinct MMIO addresses:\n");
+    for (unsigned i = 0; i < MMIO_RECORDS; ++i) if (g_mmio_records[i].used) {
+        MMIORecord *r = &g_mmio_records[i];
+        fprintf(stderr, "    %-3s %08x first=%c:%016llx count=%llu (R=%llu W=%llu) LR=%08x function~%s@%08x\n",
+                g_mmio_block_names[mmio_block(r->addr)], r->addr,
+                r->first_is_write ? 'W' : 'R', (unsigned long long)r->first_value,
+                (unsigned long long)(r->reads+r->writes), (unsigned long long)r->reads,
+                (unsigned long long)r->writes, r->lr, function_name(r->function), r->function);
+    }
+}
+
+static void dump_recent_functions(void) {
+    uint32_t unique[16];
+    size_t n = 0;
+    for (size_t back = 0; back < g_trace_count && n < 16; ++back) {
+        size_t idx = (g_trace_next + 512u - 1u - back) % 512u;
+        uint32_t addr = g_trace_ring[idx];
+        int found = 0;
+        for (size_t j = 0; j < n; ++j) if (unique[j] == addr) { found = 1; break; }
+        if (!found) unique[n++] = addr;
+    }
+    fprintf(stderr, "last %zu distinct guest functions (oldest to newest):\n", n);
+    while (n) { uint32_t addr = unique[--n]; fprintf(stderr, "  %s @ %08x\n", function_name(addr), addr); }
 }
 
 static GuestSpr *find_spr(const char *name) {
@@ -115,7 +238,7 @@ void *ppc_host_ptr(uint32_t va) {
         return g_mem2 + (va - PPC_MEM2_BASE);
     if (va >= PPC_MEM2_UNCACHED_BASE && (uint64_t)va < (uint64_t)PPC_MEM2_UNCACHED_BASE + PPC_MEM2_SIZE)
         return g_mem2 + (va - PPC_MEM2_UNCACHED_BASE);
-    if (ppc_mmio_va(va)) fatal_guest(va, "MMIO read");
+    if (ppc_mmio_va(va)) return mmio_shadow_ptr(va);
     return g_deadzone + (va & (PPC_DEADZONE_SIZE - 1));
 }
 
@@ -170,6 +293,8 @@ static void fatal_guest(uint32_t addr, const char *why) {
     uint32_t fault_fn = ppc_lookup_func(addr) ? addr : g_current_guest_function;
     fprintf(stderr, "\nGUEST STOP: %s at %08x\n", why, addr);
     if (fault_fn) fprintf(stderr, "  function: %s (0x%08x)\n", function_name(fault_fn), fault_fn);
+    if (g_trace_count) fprintf(stderr, "  note: current function name is inferred from the last ppc_trace entry and may be stale within that function.\n");
+    dump_recent_functions();
     fprintf(stderr, "guest backtrace (oldest to newest):\n");
     if (g_cpu.lr) {
         size_t lo = 0, hi = g_func_table_count;
@@ -193,6 +318,7 @@ static void fatal_guest(uint32_t addr, const char *why) {
         frame = prev;
     }
     ppc_dump_registers();
+    dump_mmio_telemetry();
     fflush(stderr);
     exit(1);
 }
@@ -244,7 +370,13 @@ void ppc_jump_indirect(void) {
     fn();
 }
 void ppc_unimplemented(const char *mnem, uint32_t pc) { fatal_guest(pc, mnem ? mnem : "unimplemented instruction"); }
-void ppc_trace(uint32_t pc) { g_current_guest_function = pc; }
+void ppc_trace(uint32_t pc) {
+    g_current_guest_function = pc;
+    g_trace_ring[g_trace_next] = pc;
+    g_trace_next = (g_trace_next + 1u) % 512u;
+    if (g_trace_count < 512u) ++g_trace_count;
+    check_watchdog();
+}
 void ppc_dbg_mark(const char *tag) { fprintf(stderr, "guest mark: %s\n", tag ? tag : "(null)"); }
 uint32_t ppc_spr_read(const char *name) {
     if (name && (!strcmp(name, "TB") || !strcmp(name, "TBL"))) return (uint32_t)host_timebase();
@@ -274,10 +406,38 @@ void ppc_dump_registers(void) {
 void ppc_dump_unique_recent(uint32_t span) { (void)span; }
 void ppc_dump_recent_calls(void) {}
 void ppc_dump_hotspots(void) {}
-/* Iteration 3 stops here: the first I/O write observed is 0xCC003004 from
-   __fill_mem during __OSInterruptInit. This is the Marco 5 stopping point. */
-void ppc_mmio_write(uint32_t va, const void *data, int n) { (void)data;(void)n; fatal_guest(va,"MMIO write (first hardware I/O)"); }
-bool ppc_mmio_va(uint32_t va) { return va >= 0xcc000000u && va < 0xce000000u; }
+void ppc_mmio_write(uint32_t va, const void *data, int n) {
+    uint8_t *shadow = mmio_shadow_ptr(va);
+    if (!shadow || n < 1 || n > 8 || !mmio_shadow_ptr(va + (uint32_t)n - 1u)) {
+        fatal_guest(va, "MMIO write outside shadow ranges"); return;
+    }
+    memcpy(shadow, data, (size_t)n);
+    uint64_t value = 0;
+    for (int i = 0; i < n; ++i) value = (value << 8) | shadow[i];
+    record_mmio(va, 1, value);
+    check_watchdog();
+}
+uint64_t ppc_mmio_read(uint32_t va, int n) {
+    uint8_t *shadow = mmio_shadow_ptr(va);
+    if (!shadow || n < 1 || n > 8 || !mmio_shadow_ptr(va + (uint32_t)n - 1u)) {
+        fatal_guest(va, "MMIO read outside shadow ranges"); return 0;
+    }
+    uint64_t value = 0;
+    for (int i = 0; i < n; ++i) value = (value << 8) | shadow[i];
+    record_mmio(va, 0, value);
+    check_watchdog();
+    return value;
+}
+bool ppc_mmio_va(uint32_t va) { return mmio_shadow_ptr(va) != NULL; }
+
+#ifdef _WIN32
+static DWORD WINAPI boot_watchdog_thread(LPVOID unused) {
+    (void)unused;
+    Sleep(10000);
+    if (g_boot_active) fatal_guest(g_current_guest_function, "boot watchdog: execution exceeded 10 seconds");
+    return 0;
+}
+#endif
 
 int main(void) {
     ppc_runtime_init();
@@ -289,6 +449,13 @@ int main(void) {
     g_cpu.gpr[13] = 0x803dfed0u;
     PPC_Func start = ppc_lookup_func(0x80004050u);
     if (!start) fatal_guest(0x80004050u, "entry function missing");
+    g_boot_active = 1;
+    g_boot_clock_start = clock();
+#ifdef _WIN32
+    g_boot_wall_start = GetTickCount64();
+    if (!CreateThread(NULL, 0, boot_watchdog_thread, NULL, 0, NULL))
+        fprintf(stderr, "warning: 10-second watchdog thread could not start\n");
+#endif
     start();
     fatal_guest(g_cpu.lr, "guest entry returned");
     return 1;
