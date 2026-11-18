@@ -136,3 +136,49 @@ Low memory is initialized with game ID `WRXE`, retail board type, MEM1/MEM2
 sizes, memory arena bounds, and Wii bus/CPU clocks. In the observed startup,
 `__start` also reads `0x800000f4` and `0x80000034` to check for optional
 apploader callbacks; both remain zero for this direct DOL entry.
+
+## Marco 8: null callback in `__OSThreadInit`
+
+The original DOL's `lwz r12,-0x54a8(r13)` at `0x80140aa4` reads guest address
+`0x803daa28` (`r13=0x803dfed0`). The address lies in the DOL BSS range
+`0x80352180..0x8067e994`, so no file-backed DOL section contains it and its
+loaded value is zero. It is an SDA-relative BSS slot (likely `.sbss`, whose
+subsection boundary is not represented in the DOL header). The generated
+functions contain reads at `0x80140aa4`, `0x8014112c`, and `0x801411fc`, but
+no writes to the slot. BSS clearing and `r13` setup are present in the runtime.
+The first call is unconditional: the instructions proceed through `mtctr r12`
+and `bctrl`, without a null check. Its argument is `*(u32*)0x800000e4`, the
+current guest thread. The same slot is called from thread selection, so this
+is the thread-switch callback/dispatch hook, not an IOS or hardware service.
+The binary offers no evidence that this slot is optional or that it should be
+populated from hardware. The stop is therefore classified as a missing guest
+thread-switch callback contract, requiring a scheduler/context-switch design;
+no null guard or guessed callback was added at this milestone. See
+[`docs/os-threads-design.md`](docs/os-threads-design.md).
+
+Commands that reproduced the evidence and validated the current runtime:
+
+```powershell
+@'
+import struct
+p=r'C:\Projetos\MegaMan10-Recomp\decomp\dtk-template-main\orig\WRXE\main.dol'
+b=open(p,'rb').read()
+for i in range(7):
+    off=struct.unpack_from('>I',b,i*4)[0]
+    addr=struct.unpack_from('>I',b,0x48+i*4)[0]
+    size=struct.unpack_from('>I',b,0x90+i*4)[0]
+    if addr <= 0x80140a00 < addr+size:
+        start=off+0x80140a00-addr
+        for va in range(0x80140a00,0x80140ab4,4):
+            pos=start+va-0x80140a00
+            print(f'{va:08x}: {b[pos:pos+4].hex()}')
+print('BSS', *(hex(struct.unpack_from('>I',b,o)[0]) for o in (0xd8,0xdc)))
+'@ | python -
+rg -n '54a8|803daa28' runtime/src/generated runtime/runtime.c runtime.h
+cmake --build build --parallel 4
+```
+
+The DOL instruction stream decodes to the generated listing in
+`runtime/src/generated/funcs_0015_80136b60.c`, starting at `0x80140a00`.
+The final executed instruction before the observed null indirect call is
+`bctrl` at `0x80140ab0`; it sets LR to `0x80140ab4`.
