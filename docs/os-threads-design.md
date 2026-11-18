@@ -1,20 +1,19 @@
 # Guest OS thread design for MM10
 
-## Finding at the current boot stop
+## Corrected finding from Marco 9
 
-`__OSThreadInit` (`0x80140a00`) calls the zero word at `r13-0x54a8`
-(`0x803daa28`) unconditionally at `0x80140ab0`. The DOL places that address in
-BSS, which the runtime clears, and the guest `r13` value resolves to the
-correct address. No generated function stores to the slot. The same pointer
-is called from thread selection at `0x80141140` and another scheduler path at
-`0x80141208`. The call receives the current thread pointer (plus zero on the
-selection path), identifying it as a thread-switch callback/dispatch hook.
+The initial diagnosis used the runtime's initial `r13` value. By the call at
+`0x80140ab0`, `OSSetCurrentContext` has restored `r13=0x80680c40`, so the live
+slot is `0x8067b798`, inside DOL `data6`. The DOL stores `0x801409f0` there;
+that target is a one-instruction `blr` default callback. The loader used to
+clear BSS after copying sections and erased this word. Clearing BSS before
+section copies preserves it, and startup now passes the call without a
+fabricated callback or thread HLE. See the Marco 9 section in `BUILDING.md`.
 
-The stop marks the boundary where genuine scheduling semantics are required.
-Do not paper over it with a fabricated no-op callback: doing so can conceal a
-missing switch while leaving ready queues, current-thread state, alarms, and
-interrupt delivery inconsistent. Do not implement context switching in this
-milestone.
+This fix removes the need for context switching at this boot stop. The design
+below remains a proposal for future guest thread API coverage. Do not add a
+fake callback to replace the DOL's default or implement switching as part of
+this loader correction.
 
 ## Reference behavior in `robox-recompiled`
 

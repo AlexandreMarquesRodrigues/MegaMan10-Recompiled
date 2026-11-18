@@ -124,8 +124,10 @@ cmake --build build --parallel 4
 python tools\sdk_inventory.py games\megaman10\func_list.json --boot-log build\marco7-run-01.log
 ```
 
-Translation result: 9,408 functions, 11 HLE, 4 PARTIAL, 0 STUB; Release
-compilation completed. Boot stop 1: null indirect call at `0x00000000`, LR
+Historical Marco 7 result (superseded for the thread stop by Marco 9):
+translation produced 9,408 functions, 11 HLE, 4 PARTIAL, 0 STUB; Release
+compilation completed. The then-observed boot stop was a null indirect call
+at `0x00000000`, LR
 `0x80140AB4`, in `__OSThreadInit` (`0x80140A00`); trace's current label was
 `OSSetCurrentContext` and may be stale. The DOL shows the null target loaded
 from an SDA callback slot and called at `0x80140AB0`, while thread context is
@@ -137,26 +139,88 @@ sizes, memory arena bounds, and Wii bus/CPU clocks. In the observed startup,
 `__start` also reads `0x800000f4` and `0x80000034` to check for optional
 apploader callbacks; both remain zero for this direct DOL entry.
 
-## Marco 8: null callback in `__OSThreadInit`
+## Marco 9: DOL BSS/data overlap and the `__OSThreadInit` callback
 
-The original DOL's `lwz r12,-0x54a8(r13)` at `0x80140aa4` reads guest address
-`0x803daa28` (`r13=0x803dfed0`). The address lies in the DOL BSS range
-`0x80352180..0x8067e994`, so no file-backed DOL section contains it and its
-loaded value is zero. It is an SDA-relative BSS slot (likely `.sbss`, whose
-subsection boundary is not represented in the DOL header). The generated
-functions contain reads at `0x80140aa4`, `0x8014112c`, and `0x801411fc`, but
-no writes to the slot. BSS clearing and `r13` setup are present in the runtime.
-The first call is unconditional: the instructions proceed through `mtctr r12`
-and `bctrl`, without a null check. Its argument is `*(u32*)0x800000e4`, the
-current guest thread. The same slot is called from thread selection, so this
-is the thread-switch callback/dispatch hook, not an IOS or hardware service.
-The binary offers no evidence that this slot is optional or that it should be
-populated from hardware. The stop is therefore classified as a missing guest
-thread-switch callback contract, requiring a scheduler/context-switch design;
-no null guard or guessed callback was added at this milestone. See
-[`docs/os-threads-design.md`](docs/os-threads-design.md).
+Correction to the preliminary Marco 8 diagnosis: `0x803daa28` is the
+effective address only while `r13=0x803dfed0`. `OSSetCurrentContext` restores
+`r13=0x80680c40` before the failing call, so the actual slot at
+`0x80140aa4` is `0x8067b798`. That address is inside DOL `data6`; its original
+word is `0x801409f0`, whose instruction is `blr`. The BSS clear erased this
+SDK default callback, which is why `bctrl` saw zero. The failure was our DOL
+loader order, not evidence that a scheduler/HLE callback had to be invented.
+The fix clears BSS before copying DOL sections. The callback now survives and
+the boot passes `0x80140ab0` without an experiment.
 
-Commands that reproduced the evidence and validated the current runtime:
+`load_dol` order before the fix: copy all 18 section slots, then clear the
+header BSS range. Fixed order: clear BSS first, then copy all section slots.
+Audit mode `MM10_DOL_AUDIT=1` reports the requested slot and CRC-32 of each
+nonempty data section. The original-order run logged `803daa28=0` before and
+after BSS clear; all data sections matched the file immediately after copy,
+but the clear corrupted `data6` and `data7`. The corrected run still logs
+`803daa28=0`; after section copy it reports `8067b798=801409f0` and every
+data-section CRC matches the file. In the pre-fix crash dump, `r13=80680c40`
+and `CTR=0`, confirming the actual effective slot `8067b798` was zero. The
+DOL bytes at callback target `801409f0` are `4e800020` (`blr`).
+
+### DOL layout from the original file
+
+Ranges use an exclusive end address. `—` means the header slot is empty.
+
+| Section | Address | Size | File offset | BSS relation |
+| --- | ---: | ---: | ---: | --- |
+| text0 | `80004000` | `000026c0` | `00000100` | outside |
+| text1 | `8000d640` | `002c29e0` | `000027c0` | outside |
+| text2–text6 | — | — | — | empty |
+| data0 | `800066c0` | `00005ca0` | `002c51a0` | outside |
+| data1 | `8000c360` | `000012e0` | `002cae40` | outside |
+| data2 | `802d0020` | `00000060` | `002cc120` | outside |
+| data3 | `802d0080` | `00000020` | `002cc180` | outside |
+| data4 | `802d00c0` | `00010840` | `002cc1a0` | outside |
+| data5 | `802e0900` | `00071880` | `002dc9e0` | ends at BSS start |
+| data6 | `80678c40` | `00003da0` | `0034e260` | wholly inside BSS |
+| data7 | `8067d7a0` | `000011e0` | `00352000` | wholly inside BSS |
+| data8–data10 | — | — | — | empty |
+
+Header BSS range: `[80352180, 8067e994)`, size `0032c814`. No data section
+covers `803daa28`; `data6` and `data7` are the sections erased by the old
+load order.
+
+### RAM CRC-32 comparison
+
+The file CRC is also the RAM CRC after the corrected copy. The old loader's
+first phase was after copies but before its BSS clear; its second phase was
+after that clear. Logs are `build/marco9-before.log` and
+`build/marco9-after-fix.log`.
+
+| Section | File / old pre-clear | Old post-clear RAM | Corrected post-copy RAM |
+| --- | ---: | ---: | ---: |
+| data0 | `1e09ff0e` match | `1e09ff0e` match | `1e09ff0e` match |
+| data1 | `e25a7469` match | `e25a7469` match | `e25a7469` match |
+| data2 | `0491db5e` match | `0491db5e` match | `0491db5e` match |
+| data3 | `4d756c7a` match | `4d756c7a` match | `4d756c7a` match |
+| data4 | `13c93e51` match | `13c93e51` match | `13c93e51` match |
+| data5 | `81c543ab` match | `81c543ab` match | `81c543ab` match |
+| data6 | `8140e2e2` match | `590bd771` mismatch | `8140e2e2` match |
+| data7 | `ea6dbf9e` match | `f650c46a` mismatch | `ea6dbf9e` match |
+
+### Raw instruction scan
+
+Scanned every instruction in each nonempty DOL text section, independently
+of `func_list.json`. The only accesses to displacement `-0x54a8(r13)` are
+three reads; there are no stores:
+
+```text
+80140aa4  lwz r12,-0x54a8(r13)
+8014112c  lwz r12,-0x54a8(r13)
+801411fc  lwz r12,-0x54a8(r13)
+```
+
+No adjacent `lis`/`addi` or `lis`/`ori` pair in the raw text forms
+`0x803daa28`.
+That address comes from the runtime's initial `r13` plus the signed offset;
+the context restore changes `r13`, making the live slot `0x8067b798`.
+
+Commands that reproduced the audit and build:
 
 ```powershell
 @'
@@ -174,11 +238,32 @@ for i in range(7):
             print(f'{va:08x}: {b[pos:pos+4].hex()}')
 print('BSS', *(hex(struct.unpack_from('>I',b,o)[0]) for o in (0xd8,0xdc)))
 '@ | python -
-rg -n '54a8|803daa28' runtime/src/generated runtime/runtime.c runtime.h
+@'
+import struct
+b=open(r'C:\Projetos\MegaMan10-Recomp\decomp\dtk-template-main\orig\WRXE\main.dol','rb').read()
+memops={32:'lwz',33:'lwzu',34:'lbz',35:'lbzu',36:'stw',37:'stwu',38:'stb',39:'stbu',40:'lhz',41:'lhzu',42:'lha',43:'lhau',44:'sth',45:'sthu',46:'lmw',47:'stmw'}
+for s in range(7):
+    off=struct.unpack_from('>I',b,s*4)[0]; va=struct.unpack_from('>I',b,0x48+s*4)[0]; size=struct.unpack_from('>I',b,0x90+s*4)[0]
+    for p in range(off,off+size,4):
+        x=struct.unpack_from('>I',b,p)[0]; op=x>>26; ra=(x>>16)&31; imm=x&0xffff; imm=imm-0x10000 if imm&0x8000 else imm
+        if op in memops and ra==13 and imm==-0x54a8: print(f'{va+p-off:08x}: {memops[op]} r{(x>>21)&31},-0x54a8(r13)')
+        if op==15 and ra==0 and p+4<off+size:
+            y=struct.unpack_from('>I',b,p+4)[0]; rt=(x>>21)&31; op2=y>>26; rt2=(y>>21)&31; ra2=(y>>16)&31; lo=y&0xffff; hi=(x&0xffff)<<16
+            if rt==rt2 and ra2==rt and op2==14 and ((hi+(lo-0x10000 if lo&0x8000 else lo))&0xffffffff)==0x803daa28: print(f'{va+p-off:08x}: lis/addi -> 803daa28')
+            if rt==rt2 and ra2==rt and op2==24 and (hi|lo)==0x803daa28: print(f'{va+p-off:08x}: lis/ori -> 803daa28')
+'@ | python -
 cmake --build build --parallel 4
+$env:MM10_DOL_AUDIT = '1'
+.\build\mm10.exe 2>&1 | Tee-Object -FilePath build\marco9-after-fix.log
+Remove-Item Env:\MM10_DOL_AUDIT
 ```
 
-The DOL instruction stream decodes to the generated listing in
-`runtime/src/generated/funcs_0015_80136b60.c`, starting at `0x80140a00`.
-The final executed instruction before the observed null indirect call is
-`bctrl` at `0x80140ab0`; it sets LR to `0x80140ab4`.
+The pre-fix run stopped at the null indirect call in `__OSThreadInit`,
+`bctrl` at `0x80140ab0`, LR `0x80140ab4`. After the loader fix, startup
+passed that call and stopped at DSP MMIO `0xcc00500a` after the runtime's
+100,000-read hardware wait guard. The trace names `DCFlushRange`
+(`0x80139440`), LR `0x801391a8`, called by `__OSInitAudioSystem`
+(`0x80139150`). This is the audio/DSP hardware boundary; no thread HLE or
+NOP-callback experiment was added. `docs/os-threads-design.md` remains a
+future scheduler proposal; its earlier claim that this stop itself required
+context switching is superseded by this finding.

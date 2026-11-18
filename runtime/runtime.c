@@ -252,6 +252,49 @@ static uint32_t read_be32(const uint8_t *p) {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
 }
 
+static uint32_t dol_crc32(const uint8_t *data, uint32_t size) {
+    uint32_t crc = 0xffffffffu;
+    for (uint32_t i = 0; i < size; ++i) {
+        crc ^= data[i];
+        for (unsigned bit = 0; bit < 8; ++bit)
+            crc = (crc >> 1) ^ (0xedb88320u & (uint32_t)-(int32_t)(crc & 1u));
+    }
+    return ~crc;
+}
+
+static uint32_t dol_file_crc32(FILE *f, uint32_t file_off, uint32_t size) {
+    uint8_t block[4096];
+    uint32_t crc = 0xffffffffu;
+    if (fseek(f, (long)file_off, SEEK_SET)) return 0;
+    while (size) {
+        uint32_t n = size < sizeof(block) ? size : (uint32_t)sizeof(block);
+        if (fread(block, 1, n, f) != n) return 0;
+        for (uint32_t i = 0; i < n; ++i) {
+            crc ^= block[i];
+            for (unsigned bit = 0; bit < 8; ++bit)
+                crc = (crc >> 1) ^ (0xedb88320u & (uint32_t)-(int32_t)(crc & 1u));
+        }
+        size -= n;
+    }
+    return ~crc;
+}
+
+static void audit_dol_data(FILE *f, const uint8_t *h, const char *phase) {
+    fprintf(stderr, "DOL_AUDIT phase=%s slot[803daa28]=%08x observed_context_slot[8067b798]=%08x\n",
+            phase, MEM_R32(0x803daa28u), MEM_R32(0x8067b798u));
+    for (unsigned i = 0; i < 11; ++i) {
+        uint32_t off = read_be32(h + 0x1c + i * 4);
+        uint32_t va = read_be32(h + 0x64 + i * 4);
+        uint32_t size = read_be32(h + 0xac + i * 4);
+        if (!size) continue;
+        uint8_t *ram = (uint8_t *)ppc_host_ptr(va);
+        uint32_t file_crc = dol_file_crc32(f, off, size);
+        uint32_t ram_crc = dol_crc32(ram, size);
+        fprintf(stderr, "DOL_AUDIT phase=%s data%u va=%08x size=%08x file_crc=%08x ram_crc=%08x match=%s\n",
+                phase, i, va, size, file_crc, ram_crc, file_crc == ram_crc ? "yes" : "no");
+    }
+}
+
 static void copy_dol_span(FILE *f, uint32_t file_off, uint32_t va, uint32_t size) {
     if (!size) return;
     void *dst = ppc_host_ptr(va);
@@ -271,6 +314,16 @@ static uint32_t load_dol(const char *path) {
     if (!f) { perror(path); exit(2); }
     if (fread(h, 1, sizeof(h), f) != sizeof(h)) { fprintf(stderr, "short DOL header\n"); exit(2); }
     uint32_t max_mem1 = PPC_MEM1_BASE;
+    uint32_t bss = read_be32(h + 0xd8), bss_size = read_be32(h + 0xdc);
+    const char *audit_env = getenv("MM10_DOL_AUDIT");
+    int audit = audit_env && audit_env[0] == '1' && audit_env[1] == '\0';
+    if (bss_size) {
+        void *dst = ppc_host_ptr(bss);
+        if (dst == g_deadzone || (uint64_t)bss + bss_size > 0x100000000ull) { fprintf(stderr, "DOL BSS outside guest RAM\n"); exit(2); }
+        memset(dst, 0, bss_size);
+        if (bss >= PPC_MEM1_BASE && bss < PPC_MEM1_BASE + PPC_MEM1_SIZE && bss + bss_size > max_mem1) max_mem1 = bss + bss_size;
+    }
+    if (audit) audit_dol_data(f, h, "after_bss_before_copy");
     for (unsigned i = 0; i < 18; ++i) {
         const unsigned off_idx = i < 7 ? i : 7 + (i - 7);
         uint32_t file_off = read_be32(h + (i < 7 ? i * 4 : 0x1c + (i - 7) * 4));
@@ -282,13 +335,7 @@ static uint32_t load_dol(const char *path) {
             if (va >= PPC_MEM1_BASE && va < PPC_MEM1_BASE + PPC_MEM1_SIZE && va + size > max_mem1) max_mem1 = va + size;
         }
     }
-    uint32_t bss = read_be32(h + 0xd8), bss_size = read_be32(h + 0xdc);
-    if (bss_size) {
-        void *dst = ppc_host_ptr(bss);
-        if (dst == g_deadzone || (uint64_t)bss + bss_size > 0x100000000ull) { fprintf(stderr, "DOL BSS outside guest RAM\n"); exit(2); }
-        memset(dst, 0, bss_size);
-        if (bss >= PPC_MEM1_BASE && bss < PPC_MEM1_BASE + PPC_MEM1_SIZE && bss + bss_size > max_mem1) max_mem1 = bss + bss_size;
-    }
+    if (audit) audit_dol_data(f, h, "after_copy");
     fclose(f);
     g_loaded_mem1_top = max_mem1;
     return read_be32(h + 0xe0);
