@@ -26,6 +26,7 @@ The project is currently in the research and reverse-engineering stage.
 - [ ] Reconstruct game code
 - [ ] Native PC executable
 - [ ] Native PC release
+- [ ] Boot: SDK start-up passes cache init, interrupts, EXI probing, thread init, and audio init; currently stops in DVD asynchronous callback dispatch *(in progress)*
 
 ## Development Log
 
@@ -42,6 +43,11 @@ The project is currently in the research and reverse-engineering stage.
 
 - The full translation (9,404 functions complete, 4 partial) now compiles in Release as a static library with a minimal runtime. The 4 partial functions contain an instruction the translator does not decode yet.
 - Next: host runtime (guest memory, DOL loader, entry point) and the first boot attempt.
+
+### November 18, 2026
+
+- Fixed the DOL loader ordering bug: the BSS range overlaps two initialized data sections, which were wiped by the late BSS clear. Clearing BSS before copying sections restored the SDK's default thread callback and let boot pass `__OSThreadInit`.
+- Added HLE for `__OSInitAudioSystem`. It preserves the SDK's AI clock/IPC setup, guest buffer copies, cache-range call, and tick delay while skipping the DSP MMIO command/status exchange. Boot now advances into DVD asynchronous request handling and stops at a null callback in `fn_801492A0`; no DVD HLE was added because that path owns request and callback state.
 
 ## Goals
 

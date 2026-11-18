@@ -1,6 +1,8 @@
 {
   "_comment": "Hand-authored address-to-runtime HLE bindings for Mega Man 10. Registry values name C handlers linked into mm10.",
   "_exi": "EXI operations complete synchronously. Probe and GetID report no attached device. __EXIProbe is the function's DOL name.",
+  "_audio": "__OSInitAudioSystem preserves SDK memory/cache and AI-clock side effects while skipping only DSP MMIO and DSP status polling.",
+  "0x80139150": "hle_OSInitAudioSystem",
   "0x80171af0": "hle_EXIImm",
   "0x80171e20": "hle_EXIDma",
   "0x80171f20": "hle_EXISync",

@@ -267,3 +267,48 @@ passed that call and stopped at DSP MMIO `0xcc00500a` after the runtime's
 NOP-callback experiment was added. `docs/os-threads-design.md` remains a
 future scheduler proposal; its earlier claim that this stop itself required
 context switching is superseded by this finding.
+
+## Marco 10: boot audio HLE and next hardware stop
+
+`__OSInitAudioSystem` is at `0x80139150` in the source DOL (464 bytes).
+The stop label `DCFlushRange` was stale: that helper returned at
+`0x801391a8`, but the actual unsupported MMIO read loop is at `0x801391c8`.
+It reads DSP register `0xCC00500A` and spins while bit 0 is set. The SDK
+writes `0x08AC`, then sets bit 0 to start a DSP command; it waits for that
+busy/start bit to clear before proceeding. Later in the function it polls DSP
+status registers, programs DSP DMA registers, and starts another command.
+
+Outside DSP MMIO, the function conditionally calls `__AIClockInit(1)` when
+the SDA flag at `r13-0x4008` is clear (including its IOS IPC bookkeeping and
+tick reads), calls `OSGetArenaHi`, copies 0x80 bytes from `0x81000000` to
+`arena_hi-0x80`, copies 0x80 bytes from `0x80314250` to `0x81000000`, calls
+`DCFlushRange(0x81000000, 0x80)`, waits 0x892 time-base ticks, then copies
+0x80 bytes from `arena_hi-0x80` back to `0x81000000`. There are no direct
+low-memory or OS queue/heap/interrupt writes and no `ICInvalidate` call in
+this function. ARAM/DSP transfer setup is through DSP MMIO, not direct RAM
+writes. The HLE retains the non-DSP calls, copies, and delay, and omits the
+DSP register commands/status polling because the host runtime does not model
+the DSP/ARAM engine.
+
+The HLE is registered at `0x80139150` in `games/megaman10/hle_registry.json`
+and implemented by `runtime/hle_audio.c`. Regeneration and build commands:
+
+```powershell
+New-Item -ItemType Directory -Force .translation-input | Out-Null
+Copy-Item -LiteralPath 'C:\Projetos\MegaMan10-Recomp\decomp\dtk-template-main\orig\WRXE\main.dol' -Destination .translation-input\main.dol -Force
+python ..\WiiRecomp\recompile_wii.py .translation-input\main.dol --no-scaffold --config-dir games\megaman10 --out runtime\src\generated
+cmake --build build --parallel 4
+.\build\mm10.exe 2>&1 | Tee-Object -FilePath build\marco10-run-01.log
+```
+
+| Stop | Function | SDK expectation / observed state | Decision |
+| --- | --- | --- | --- |
+| `0xCC00500A`, loop at `0x801391C8` (previous stop; LR `0x801391A8`) | `__OSInitAudioSystem` (`0x80139150`, DOL name confirmed) | DSP command busy/start bit 0 must clear; subsequent DSP status and DMA handshakes complete audio-system startup. | Added `hle_OSInitAudioSystem`; kept AI clock/IPC, buffer copies, `DCFlushRange`, and time-base delay; omitted DSP MMIO only. Run passed this stop. |
+| `bctrl` at `0x80149834`, LR `0x80149838`, target/CTR `0` | `fn_801492A0` (generic generated label; no SDK name confirmed). The preceding named call chain includes `DVDInquiryAsync` at `0x8014A320`. | Dispatcher loads callback from `-0x5458(r13)`; the current slot is zero. This is DVD asynchronous request/callback handling, whose request and callback state is observable. | Stopped at the DVD boundary; no HLE. |
+
+Final stop: indirect call target `0x00000000`, call site `0x80149834`,
+function `fn_801492A0` (generic label, not a confirmed SDK name), LR
+`0x80149838`. DOL disassembly confirms the `bctrl` at that address and the
+preceding callback load; the label is not misidentified as a named DVD SDK
+routine. The runtime trace stopped after one iteration at this stateful DVD
+callback path, within the requested 12-iteration limit.
