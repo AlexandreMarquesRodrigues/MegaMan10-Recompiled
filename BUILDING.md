@@ -105,6 +105,33 @@ signature database/matcher to produce `games/megaman10/identified_funcs.json`
 (or equivalent data supplied in the configured directory), with entries
 mapping guest addresses to confirmed SDK function names.
 
+## Marco 7: first name-based HLE (EXI)
+
+The configured registry maps 11 EXI-family addresses to synchronous HLE
+handlers. `__EXIProbe` returns false and `EXIGetID` returns false without
+changing its output buffer, matching the callers' no-device path. Transfers,
+selection and locking complete immediately with success. The inventory script
+counts named functions by SDK prefix and can mark names seen in a boot log.
+
+Working commands for this milestone:
+
+```powershell
+New-Item -ItemType Directory -Force .translation-input | Out-Null
+Copy-Item -LiteralPath 'C:\Projetos\MegaMan10-Recomp\decomp\dtk-template-main\orig\WRXE\main.dol' -Destination .translation-input\main.dol -Force
+python ..\WiiRecomp\recompile_wii.py .translation-input\main.dol --no-scaffold --config-dir games\megaman10 --out runtime\src\generated
+cmake --build build --parallel 4
+.\build\mm10.exe 2>&1 | Tee-Object -FilePath build\marco7-run-01.log
+python tools\sdk_inventory.py games\megaman10\func_list.json --boot-log build\marco7-run-01.log
+```
+
+Translation result: 9,408 functions, 11 HLE, 4 PARTIAL, 0 STUB; Release
+compilation completed. Boot stop 1: null indirect call at `0x00000000`, LR
+`0x80140AB4`, in `__OSThreadInit` (`0x80140A00`); trace's current label was
+`OSSetCurrentContext` and may be stale. The DOL shows the null target loaded
+from an SDA callback slot and called at `0x80140AB0`, while thread context is
+being initialized. This is the requested context/thread boundary, so no
+context-switch emulation was added.
+
 Low memory is initialized with game ID `WRXE`, retail board type, MEM1/MEM2
 sizes, memory arena bounds, and Wii bus/CPU clocks. In the observed startup,
 `__start` also reads `0x800000f4` and `0x80000034` to check for optional
