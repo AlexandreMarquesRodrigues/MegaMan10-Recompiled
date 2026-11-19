@@ -85,6 +85,21 @@ static const char *function_name(uint32_t addr) {
 
 #ifdef MM10_WATCH
 #define DVD_CB_SLOT 0x8067b7e8u
+static int g_watch_dvd_init_seen;
+static void watch_dump_words(const char *tag, uint32_t first, uint32_t end) {
+    fprintf(stderr, "MM10_WATCH_WORDS %s %08x..%08x\n", tag, first, end);
+    for (uint32_t a = first; a < end; a += 4)
+        fprintf(stderr, "  %08x=%08x\n", a, MEM_R32(a));
+}
+static void watch_dump_boot_state(const char *phase) {
+    fprintf(stderr, "MM10_WATCH_STATE %s r13=%08x loaded_mem1_top=%08x\n",
+            phase, g_cpu.gpr[13], g_loaded_mem1_top);
+    watch_dump_words("lowmem_00000028_40", 0x80000028u, 0x80000044u);
+    watch_dump_words("lowmem_000000f0_100", 0x800000f0u, 0x80000100u);
+    watch_dump_words("lowmem_00003100_140", 0x80003100u, 0x80003140u);
+    watch_dump_words("sda_mem2_lo_neighbors", g_cpu.gpr[13] - 0x54e0u, g_cpu.gpr[13] - 0x54c8u);
+    watch_dump_words("sda_mem2_hi_neighbors", g_cpu.gpr[13] - 0x3fc0u, g_cpu.gpr[13] - 0x3fa0u);
+}
 static void watch_snapshot(const char *phase) {
     uint8_t *p = (uint8_t *)ppc_host_ptr(DVD_CB_SLOT - 8u);
     fprintf(stderr, "MM10_WATCH_SNAPSHOT %s addr=%08x bytes=", phase, DVD_CB_SLOT - 8u);
@@ -173,6 +188,10 @@ static void record_mmio(uint32_t va, int write, uint64_t value) {
     }
     r->lr = g_cpu.lr;
     r->function = g_current_guest_function;
+#ifdef MM10_WATCH
+    if (g_watch_dvd_init_seen && va >= 0xcc002000u && va < 0xcc003000u)
+        fatal_guest(va, "MM10_WATCH stop at first VI/GX hardware access");
+#endif
     if (g_same_mmio_read_count > 100000ull)
         fatal_guest(va, "MMIO wait loop: same address read more than 100000 times consecutively");
 }
@@ -249,8 +268,23 @@ static void initialize_low_memory(void) {
     MEM_W32(0x80000300u, 0x4c000064u);
     MEM_W32(0x80000800u, 0x4c000064u);
     MEM_W32(0x80000c00u, 0x4c000064u);
-    MEM_W32(0x8000311cu, PPC_MEM2_SIZE);
-    MEM_W32(0x80003128u, PPC_MEM2_BASE + PPC_MEM2_SIZE);
+    /* Wii IOS low-memory layout from Dolphin's IOS.cpp address constants. */
+    MEM_W32(0x80003100u, PPC_MEM1_SIZE); /* MEM1 physical size */
+    MEM_W32(0x80003104u, PPC_MEM1_SIZE); /* MEM1 simulated size */
+    MEM_W32(0x80003108u, PPC_MEM1_BASE + PPC_MEM1_SIZE); /* MEM1 end */
+    MEM_W32(0x8000310cu, 0u); /* MEM1 arena begin */
+    MEM_W32(0x80003110u, PPC_MEM1_BASE + PPC_MEM1_SIZE); /* MEM1 arena end */
+    MEM_W32(0x80003114u, 0xdeadbeefu); /* Dolphin IOS placeholder PH1 */
+    MEM_W32(0x80003118u, PPC_MEM2_SIZE); /* MEM2 physical size */
+    MEM_W32(0x8000311cu, PPC_MEM2_SIZE); /* MEM2 simulated size */
+    MEM_W32(0x80003120u, PPC_MEM2_BASE + PPC_MEM2_SIZE); /* MEM2 end */
+    MEM_W32(0x80003124u, PPC_MEM2_BASE + 0x800u); /* MEM2 arena begin */
+    MEM_W32(0x80003128u, PPC_MEM2_BASE + PPC_MEM2_SIZE); /* MEM2 arena end */
+    MEM_W32(0x8000312cu, 0xdeadbeefu); /* Dolphin IOS placeholder PH2 */
+    MEM_W32(0x80003130u, 0u); /* no IOS IPC buffer in direct-DOL runtime */
+    MEM_W32(0x80003134u, 0u);
+    MEM_W32(0x80003138u, 0u);
+    MEM_W32(0x8000313cu, 0xdeadbeefu); /* Dolphin IOS placeholder PH3 */
     MEM_W32(0x80003184u, PPC_MEM1_BASE);
     MEM_W16(0x800030e6u, 0x8201u);
     MEM_W8(0x8000315cu, 0x80u);
@@ -479,7 +513,20 @@ void ppc_trace(uint32_t pc) {
     g_trace_next = (g_trace_next + 1u) % 512u;
     if (g_trace_count < 512u) ++g_trace_count;
 #ifdef MM10_WATCH
-    if (pc == 0x801462a0u) watch_snapshot("DVDInit_entry");
+    if (pc == 0x801462a0u) {
+        watch_snapshot("DVDInit_entry");
+        g_watch_dvd_init_seen = 1;
+    }
+    if (pc == 0x801373d0u) watch_dump_boot_state("ClearMEM2Arena_entry");
+    if (pc == 0x801394d0u) {
+        uint32_t r3 = g_cpu.gpr[3], r4 = g_cpu.gpr[4];
+        uint64_t lines = r4 ? ((uint64_t)(r4 + (r3 & 31u) + 31u) >> 5) : 0;
+        uint32_t first = r3 & ~31u;
+        fprintf(stderr, "MM10_WATCH_DCZeroRange_ENTRY r3=%08x r4=%08x lines=%llu zero=[%08x,%08llx)\n",
+                r3, r4, (unsigned long long)lines, first,
+                (unsigned long long)((uint64_t)first + lines * 32u));
+        watch_dump_boot_state("DCZeroRange_entry");
+    }
 #endif
     check_watchdog();
 }

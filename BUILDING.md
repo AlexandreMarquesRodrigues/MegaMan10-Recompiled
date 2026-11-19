@@ -425,11 +425,10 @@ It includes `SCInit`/`SCReloadConfFileAsync` paths into NAND, OS/system paths
 into ES, plus title functions calling IOS services; this DOL uses DVD as well
 as NAND/ES/IOS, not only NAND/ES.
 
-Classification: (c), other. `ClearMEM2Arena` did execute and its translated
-`DCZeroRange` cleared an address in loaded data6. The writer was not absent or
-replaced by an EXI/audio HLE, so no fix was made under the requested rule.
-The repeated stop remains target `0x00000000`, `fn_801492A0`, LR
-`0x80149838`, indirect call site `0x80149834`.
+Marco 13 supersedes this classification: the writer ran, and its translated
+`DCZeroRange` was given a corrupted MEM2 arena start because the runtime's
+low-memory MEM2 fields were missing/misplaced. The reset path was not evidence
+that clearing loaded data6 was intentional.
 
 Commands that worked:
 
@@ -439,3 +438,124 @@ cmake --build build --parallel 4
 .\build\mm10.exe 2>&1 | Tee-Object -FilePath build\marco12-watch-run-02.log
 python tools/find_writes.py 'C:\Projetos\MegaMan10-Recomp\decomp\dtk-template-main\orig\WRXE\main.dol' games\megaman10\func_list.json --output build\marco12-static.txt
 ```
+
+## Marco 13: MEM2 arena bounds and the DVD callback
+
+### DOL disassembly and clear-range calculation
+
+Disassembled the original DOL (the source path in `AGENTS.md`) at
+`0x801373D0` for 484 bytes and at `0x801394D0` for 44 bytes. Both ranges map
+through text1 (`file offset 0x27c0`, VA `0x8000d640`). The working extraction
+and disassembly commands are:
+
+```powershell
+@'
+import struct
+p=r'C:\Projetos\MegaMan10-Recomp\decomp\dtk-template-main\orig\WRXE\main.dol'
+b=open(p,'rb').read()
+for name,start,size in [('clearmem2',0x801373d0,484),('dczero',0x801394d0,44)]:
+    off=0x27c0+(start-0x8000d640)
+    open(f'build/{name}.bin','wb').write(b[off:off+size])
+'@ | python -
+& .\build\powerpc-eabi-objdump.exe -D -EB -b binary -m powerpc:common --adjust-vma=0x801373d0 .\build\clearmem2.bin
+& .\build\powerpc-eabi-objdump.exe -D -EB -b binary -m powerpc:common --adjust-vma=0x801394d0 .\build\dczero.bin
+```
+
+`ClearMEM2Arena` first checks `OSGetResetCode` at `0x8013FE70`. On its normal
+path it gets MEM2 arena high from `OSGetMEM2ArenaHi` (`lwz r3,-0x3fac(r13)` at
+`0x80138e40`), gets low from `OSGetMEM2ArenaLo` (`lwz r3,-0x54d4(r13)` at
+`0x80138e70`), subtracts low from high for the byte count, and gets low again
+for the starting address. It then calls `DCZeroRange` at `0x80137424`. The
+alternate reset/region-descriptor branches use descriptor words at
+`0x805c820c` and `0x805c8210` to choose a subrange; their `DCZeroRange` calls
+are at `0x80137490`, `0x801374f8`, `0x8013753c`, and `0x8013758c`.
+
+`DCZeroRange` returns for a zero size. Otherwise it computes
+`ceil((size + (start & 31))/32)` cache lines, places that count in CTR, then
+loops over `dcbz r0,r3` and advances r3 by 32 bytes. `dcbz` clears the whole
+32-byte line containing r3, so the first address is `start & ~31` and the
+exclusive end is that address plus 32 times the line count. The generated
+implementation aligns with `& ~0x1f` and emits eight `MEM_W32` zero stores,
+which map to guest RAM through the same address translator as ordinary stores.
+
+### Cause and correction
+
+Before the fix, the boot snapshot had MEM2 simulated size at `0x8000311c`,
+but it had put the MEM2 end at `0x80003128`, left the actual arena-begin word
+`0x80003124` zero, and left the physical-size/end words `0x80003118` and
+`0x80003120` zero. The SDK therefore initialized
+`r13-0x54d4` (`0x8067b76c` with live `r13=0x80680c40`) to `0xffffffff` and
+`r13-0x3fac` (`0x8067cc94`) to `0x94000000`. At `DCZeroRange` entry it received
+`r3=0xffffffff`, `r4=0x94000001`: 77,594,625 lines, covering the wrapped
+interval `[0xffffffe0,0x194000000)`. That interval wraps through MEM1 and
+cleared the initialized DVD callback at `0x8067b7e8`.
+
+The runtime now lays out Wii IOS low-memory fields at their actual addresses:
+
+| Address | Runtime value | Meaning |
+| --- | ---: | --- |
+| `0x80003100` | `0x01800000` | MEM1 physical size |
+| `0x80003104` | `0x01800000` | MEM1 simulated size |
+| `0x80003108` | `0x81800000` | MEM1 end |
+| `0x8000310c` | `0x00000000` | MEM1 arena begin |
+| `0x80003110` | `0x81800000` | MEM1 arena end |
+| `0x80003118` | `0x04000000` | MEM2 physical size |
+| `0x8000311c` | `0x04000000` | MEM2 simulated size |
+| `0x80003120` | `0x94000000` | MEM2 end |
+| `0x80003124` | `0x90000800` | MEM2 arena begin |
+| `0x80003128` | `0x94000000` | MEM2 arena end |
+
+The direct-DOL runtime has no emulated IOS reservation or IPC buffer, so its
+MEM2 arena end equals the 64 MiB physical end. Dolphin's IOS setup computes
+these bounds from IOS-specific reserved and IPC-buffer sizes; it sets arena
+begin to `MEM2_BASE+0x800`. Dolphin's `Boot_BS2Emu.cpp` writes legacy fields
+`0x80000028` (physical MEM1 size), `0x80000030` (zero), `0x80000034`
+(`0x817fec60`), `0x800000f0` (simulated MEM1 size), `0x800000f4`
+(`0x8179b500`), and the same bus/CPU clocks used here. Our direct-DOL path
+keeps `0x80000030` at the aligned end of loaded DOL/BSS (`0x8067e9a0`) so
+MEM1 arena clearing preserves the image; callback words `0x34` and `0xf4`
+remain zero because we do not run an apploader. Those are deliberate direct
+boot differences. The corrected runtime call now enters `DCZeroRange` with
+`r3=0x90000800`, `r4=0x03fff800`, 2,097,088 lines, and clears exactly
+`[0x90000800,0x94000000)`.
+
+At the corrected call, `r13=0x80680c40`; `r13-0x54d8=0x8067b768` contains
+MEM1 arena low `0x8067e9a0`; `r13-0x54d4=0x8067b76c` contains MEM2 arena low
+`0x90000800`; `r13-0x3fb0=0x8067cc90` contains MEM1 arena high `0x81800000`;
+and `r13-0x3fac=0x8067cc94` contains MEM2 arena high `0x94000000`. The
+neighboring words are recorded in `build/marco13-run-04.log`.
+
+`load_dol`'s `max_mem1` is correct for this source DOL: the BSS ends at
+`0x8067e994`, after data sections, and the 32-byte rounded direct-boot arena
+start is `0x8067e9a0`. The loader clears BSS before copying sections. `dcbz`
+alignment is 32 bytes. `ppc_host_ptr` maps cached MEM1 `0x80000000–0x81800000`
+to `g_mem1`, cached MEM2 `0x90000000–0x94000000` to the separate 64 MiB
+`g_mem2`, and their uncached aliases to those same respective buffers; no
+MEM2 address aliases into MEM1.
+
+### Verification and stop
+
+With `MM10_WATCH=ON`, the watch log records both the entry registers and
+aligned interval for `DCZeroRange`. The DVD slot remains `0x80146290` at DOL
+load, at `DVDInit` entry (`0x801462a0`), and at the next stop. There is no
+watch write to the slot after section loading. For this run, MM10_WATCH allows
+pre-DVD VI accesses to proceed so the slot check completes, then stops at the
+first VI access after `DVDInit`.
+
+Commands that worked (Ninja completes successfully; the executable's
+nonzero status is its intentional hardware-boundary stop):
+
+```powershell
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DMM10_WATCH=ON
+cmake --build build --parallel 4
+.\build\mm10.exe 2>&1 | Tee-Object -FilePath build\marco13-run-04.log
+```
+
+Final stop: VI halfword read at `0xCC00206E`, issued by DOL instruction
+`lhz r0,0x206e(r3)` at `0x8013CD80` in `fn_8013CD60` (the DOL symbol name is
+generic; no SDK name is confirmed). Its LR is `0x80019F2C`. This is the first
+post-`DVDInit` VI access; the watch snapshot at the stop still shows
+`0x8067B7E8=0x80146290`. The entry trace can show a stale nested
+`OSRestoreInterrupts` label, so the function and instruction above are
+identified from the LR, effective address, and DOL disassembly rather than
+that trace label.
