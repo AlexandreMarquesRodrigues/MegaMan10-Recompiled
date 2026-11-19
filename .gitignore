@@ -4,3 +4,6 @@ build/
 
 .translation-input/
 *.dol
+
+.translation-input/
+*.dol
