@@ -551,6 +551,15 @@ cmake --build build --parallel 4
 .\build\mm10.exe 2>&1 | Tee-Object -FilePath build\marco13-run-04.log
 ```
 
+Iteration record (four runs, within the ten-run limit):
+
+| Run | Observation / stop |
+| --- | --- |
+| `marco13-run-01.log` | Before the low-memory fix: `DCZeroRange` entered with `r3=ffffffff`, `r4=94000001`; data6 slot was cleared and execution stopped at the null DVD callback, `fn_801492A0`, LR `0x80149838`. |
+| `marco13-run-02.log` | After the low-memory fix: MEM2 clear was confined to `0x90000800..0x94000000`, DVD slot survived, then the old 10-second watchdog stopped at `fn_801A1A30`, LR `0x801A321C`. |
+| `marco13-run-03.log` | First attempt to stop on VI MMIO halted too early, before `DVDInit`, at `0xCC00206C`; the stop was gated on DVDInit for the final run. |
+| `marco13-run-04.log` | Final run: slot remained `0x80146290` at DVDInit and stop; halted at the first post-DVD VI access, `0xCC00206E`. |
+
 Final stop: VI halfword read at `0xCC00206E`, issued by DOL instruction
 `lhz r0,0x206e(r3)` at `0x8013CD80` in `fn_8013CD60` (the DOL symbol name is
 generic; no SDK name is confirmed). Its LR is `0x80019F2C`. This is the first
