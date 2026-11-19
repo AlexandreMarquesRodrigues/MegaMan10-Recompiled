@@ -26,6 +26,10 @@ static clock_t g_boot_clock_start;
 static uint64_t g_boot_wall_start;
 static uint32_t g_last_mmio_read;
 static uint64_t g_same_mmio_read_count;
+static uint32_t g_mmio_stop_blocks;
+static int g_mmio_stop_initialized;
+#define DVD_CB_SLOT 0x8067b7e8u
+static int g_watch_dvd_init_seen;
 
 #define MMIO_CC_BASE 0xcc000000u
 #define MMIO_CC_SIZE 0x00010000u
@@ -84,8 +88,6 @@ static const char *function_name(uint32_t addr) {
 }
 
 #ifdef MM10_WATCH
-#define DVD_CB_SLOT 0x8067b7e8u
-static int g_watch_dvd_init_seen;
 static void watch_dump_words(const char *tag, uint32_t first, uint32_t end) {
     fprintf(stderr, "MM10_WATCH_WORDS %s %08x..%08x\n", tag, first, end);
     for (uint32_t a = first; a < end; a += 4)
@@ -188,10 +190,21 @@ static void record_mmio(uint32_t va, int write, uint64_t value) {
     }
     r->lr = g_cpu.lr;
     r->function = g_current_guest_function;
-#ifdef MM10_WATCH
-    if (g_watch_dvd_init_seen && va >= 0xcc002000u && va < 0xcc003000u)
-        fatal_guest(va, "MM10_WATCH stop at first VI/GX hardware access");
-#endif
+    if (r->reads + r->writes == 1)
+        fprintf(stderr, "MM10_WATCH addr=%08x %c value=%016llx LR=%08x function=%s@%08x\n",
+                va, write ? 'W' : 'R', (unsigned long long)value, g_cpu.lr,
+                function_name(g_current_guest_function), g_current_guest_function);
+    if (!g_mmio_stop_initialized) {
+        const char *stop = getenv("MM10_STOP_ON_MMIO");
+        if (stop && strcmp(stop, "VI") == 0) g_mmio_stop_blocks = 1u << 0;
+        if (stop && strcmp(stop, "GX") == 0) g_mmio_stop_blocks = 1u << 10;
+        g_mmio_stop_initialized = 1;
+    }
+    int is_gx = (va >= 0xcc000000u && va < 0xcc002000u) ||
+                (va >= 0xcc008000u && va < 0xcc009000u);
+    if (g_watch_dvd_init_seen && ((is_gx && (g_mmio_stop_blocks & (1u << 10))) ||
+                                  (!is_gx && (g_mmio_stop_blocks & (1u << mmio_block(va))))))
+        fatal_guest(va, "MM10_STOP_ON_MMIO requested stop");
     if (g_same_mmio_read_count > 100000ull)
         fatal_guest(va, "MMIO wait loop: same address read more than 100000 times consecutively");
 }
@@ -495,6 +508,20 @@ void ppc_call_indirect(uint32_t addr) {
         for (unsigned r = first; r <= 31; ++r) g_cpu.gpr[r] = MEM_R32(g_cpu.gpr[11] - 0x48u + (r - 14u) * 4u);
         return;
     }
+    if (addr == 0x8016779cu) {
+        static int osreport_line_start = 1;
+        uint32_t text_va = g_cpu.gpr[4];
+        uint32_t text_size = g_cpu.gpr[5];
+        const uint8_t *text = (const uint8_t *)ppc_host_ptr(text_va);
+        for (uint32_t i = 0; i < text_size; ++i) {
+            if (osreport_line_start) { fputs("[OSReport] ", stdout); osreport_line_start = 0; }
+            fputc(text[i], stdout);
+            if (text[i] == '\n') osreport_line_start = 1;
+        }
+        fflush(stdout);
+        g_cpu.gpr[3] = 1;
+        return;
+    }
     PPC_Func fn = ppc_lookup_func(addr);
     if (!fn) fatal_guest(addr, "unimplemented indirect function");
     if (g_guest_stack_depth < sizeof(g_guest_stack)/sizeof(g_guest_stack[0])) g_guest_stack[g_guest_stack_depth++] = addr;
@@ -512,10 +539,10 @@ void ppc_trace(uint32_t pc) {
     g_trace_ring[g_trace_next] = pc;
     g_trace_next = (g_trace_next + 1u) % 512u;
     if (g_trace_count < 512u) ++g_trace_count;
+    if (pc == 0x801462a0u) g_watch_dvd_init_seen = 1;
 #ifdef MM10_WATCH
     if (pc == 0x801462a0u) {
         watch_snapshot("DVDInit_entry");
-        g_watch_dvd_init_seen = 1;
     }
     if (pc == 0x801373d0u) watch_dump_boot_state("ClearMEM2Arena_entry");
     if (pc == 0x801394d0u) {

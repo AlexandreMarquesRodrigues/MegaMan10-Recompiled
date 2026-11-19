@@ -568,3 +568,20 @@ post-`DVDInit` VI access; the watch snapshot at the stop still shows
 `OSRestoreInterrupts` label, so the function and instruction above are
 identified from the LR, effective address, and DOL disassembly rather than
 that trace label.
+## Marco 15: VI reader, MMIO watch, and OSReport
+
+Commands that worked:
+
+```powershell
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DMM10_WATCH=OFF
+cmake --build build
+.\build\mm10.exe 2>&1 | Tee-Object -FilePath build\marco15-run-02.log
+```
+
+The MMIO watch now logs each address once, with an optional stop through
+`MM10_STOP_ON_MMIO=VI` or `GX`. With the option off, the run passed the VI
+read and reached an SDK wait in `fn_801A31D0`; see `build/marco15-run-03.log`.
+The wait repeatedly tests `0x8067BB60` (SDA `r13-0x50E0`), which stayed `1`.
+OSReport text is emitted by the `__FileWrite` HLE; the run reported
+`Not enough IPC arena`, failed DVD command allocation, and `USB ERR` before
+the wait. The callback path that clears the flag is `fn_801A2A60`.
