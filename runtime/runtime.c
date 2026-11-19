@@ -292,10 +292,10 @@ static void initialize_low_memory(void) {
     MEM_W32(0x8000311cu, PPC_MEM2_SIZE); /* MEM2 simulated size */
     MEM_W32(0x80003120u, PPC_MEM2_BASE + PPC_MEM2_SIZE); /* MEM2 end */
     MEM_W32(0x80003124u, PPC_MEM2_BASE + 0x800u); /* MEM2 arena begin */
-    MEM_W32(0x80003128u, PPC_MEM2_BASE + PPC_MEM2_SIZE); /* MEM2 arena end */
+    MEM_W32(0x80003128u, 0x933e0000u);   /* fim da arena MEM2 */
     MEM_W32(0x8000312cu, 0xdeadbeefu); /* Dolphin IOS placeholder PH2 */
-    MEM_W32(0x80003130u, 0u); /* no IOS IPC buffer in direct-DOL runtime */
-    MEM_W32(0x80003134u, 0u);
+    MEM_W32(0x80003130u, 0x933e0000u);   /* início do buffer IPC */
+    MEM_W32(0x80003134u, 0x93400000u);   /* fim do buffer IPC */
     MEM_W32(0x80003138u, 0u);
     MEM_W32(0x8000313cu, 0xdeadbeefu); /* Dolphin IOS placeholder PH3 */
     MEM_W32(0x80003184u, PPC_MEM1_BASE);
