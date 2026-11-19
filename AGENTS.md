@@ -14,3 +14,5 @@
 - Boot passa por OSInit, EXI, áudio (HLE), threads e DVDInit; MEM2/arena corrigidas.
 - Parada atual: leitura VI em 0xCC00206E, LR 0x80019F2C (código do jogo).
 - Armadilhas: o nome da função em ppc_trace fica desatualizado dentro da função; o BSS do DOL cobre data6/data7; os campos da memória baixa em 0x80003100+ importam.
+
+- Rode cada comando git sozinho, sem ';', '&&' nem 'if ($LASTEXITCODE...)'. Assim o prefixo fica curto e as regras valem.
