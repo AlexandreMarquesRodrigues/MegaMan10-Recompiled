@@ -13,5 +13,10 @@
   "0x80172b70": "hle_EXIInit",
   "0x80172d40": "hle_EXILock",
   "0x80172e40": "hle_EXIUnlock",
-  "0x80172f50": "hle_EXIGetID"
+  "0x80172f50": "hle_EXIGetID",
+  "0x8017de70": "hle_IOS_Open",
+  "0x8017eba0": "hle_IOS_Ioctlv",
+  "0x8017dd50": "hle_IOS_OpenAsync",
+  "0x8017e700": "hle_IOS_IoctlAsync",
+  "_ios": "IOS_* sincronas completam na hora (runtime/hle_ios.c); variantes Async param com mensagem."
 }

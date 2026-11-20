@@ -28,7 +28,7 @@ add_custom_command(
     VERBATIM
 )
 
-add_executable(mm10 runtime/runtime.c runtime/hle_exi.c runtime/hle_audio.c "${FUNCTION_NAMES_C}")
+add_executable(mm10 runtime/runtime.c runtime/hle_exi.c runtime/hle_audio.c runtime/hle_ios.c runtime/hle_ios.c "${FUNCTION_NAMES_C}")
 target_include_directories(mm10 PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/runtime/src/generated"
