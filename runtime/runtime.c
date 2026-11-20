@@ -623,6 +623,17 @@ int main(void) {
     ppc_runtime_init();
     uint32_t entry = load_dol("private/main.dol");
     initialize_low_memory();
+    /* Layout da memória baixa deixado pelo IOS (WiiBrew, "Memory map") */
+    MEM_W32(0x80003118u, 0x04000000u);  /* MEM2 física */
+    MEM_W32(0x8000311cu, 0x04000000u);  /* MEM2 simulada */
+    MEM_W32(0x80003120u, 0x93400000u);  /* fim da MEM2 visível ao PPC */
+    MEM_W32(0x80003124u, 0x90000800u);  /* início da arena MEM2 */
+    MEM_W32(0x80003128u, 0x933e0000u);  /* fim da arena MEM2 */
+    MEM_W32(0x80003130u, 0x933e0000u);  /* início do buffer IPC */
+    MEM_W32(0x80003134u, 0x93400000u);  /* fim do buffer IPC */
+    MEM_W32(0x80003138u, 0x00000011u);  /* versão do Hollywood */
+    MEM_W32(0x80003140u, 0x00090204u);  /* versão do IOS (IOS9 2.4) */
+    MEM_W32(0x80003144u, 0x00062507u);  /* data do build do IOS */
     if (entry != 0x80004050u) fprintf(stderr, "DOL entry is %08x; requested entry is 80004050\n", entry);
     g_cpu.gpr[1] = 0x817ff000u;
     g_cpu.gpr[2] = 0x803e0000u;
