@@ -1,7 +1,8 @@
-/* HLE minimo do IOS para o boot: chamadas sincronas completam na hora, com log. */
+    /* HLE minimo do IOS para o boot: chamadas sincronas completam na hora, com log. */
 #include "runtime.h"
 #include <stdio.h>
 #include <stdint.h>
+#include <string.h>
 
 #define IOS_MAX_FDS 32
 static char g_ios_path[IOS_MAX_FDS][48];
@@ -106,5 +107,23 @@ IOS_ASYNC_STOP(IOS_CloseAsync)
 IOS_ASYNC_STOP(IOS_ReadAsync)
 IOS_ASYNC_STOP(IOS_WriteAsync)
 IOS_ASYNC_STOP(IOS_SeekAsync)
-IOS_ASYNC_STOP(IOS_IoctlAsync)
 IOS_ASYNC_STOP(IOS_IoctlvAsync)
+
+/* (fd, cmd, in, inLen, out, outLen, callback, userData) */
+void hle_IOS_IoctlAsync(void) {
+    int32_t fd = (int32_t)g_cpu.gpr[3];
+    const char *path = ios_fd_path(fd);
+    printf("[IOS] ioctlAsync fd=%d (%s) cmd=0x%x in=%u out=%u cb=0x%08x\n", fd, path,
+           (unsigned)g_cpu.gpr[4], (unsigned)g_cpu.gpr[6], (unsigned)g_cpu.gpr[8],
+           (unsigned)g_cpu.gpr[9]);
+    fflush(stdout);
+    if (strcmp(path, "/dev/stm/eventhook") == 0) {
+        /* O IOS so responde quando o usuario aperta power/reset: fica pendente para sempre. */
+        ios_ret(0);
+        return;
+    }
+    printf("[IOS] ioctlAsync neste dispositivo ainda nao implementada\n");
+    fflush(stdout);
+    ppc_unimplemented("IOS_IoctlAsync", g_cpu.lr);
+    ios_ret(-1);
+}
