@@ -84,12 +84,42 @@ void hle_IOS_Ioctl(void) {  /* (fd, cmd, in, inLen, out, outLen) */
     ios_ret(0);
 }
 
+/* ES (/dev/es): so o minimo que o boot consulta. Numeros dos ioctlv: WiiBrew. */
+#define MM10_TITLE_HI 0x00010001u  /* WiiWare (titulos da loja) */
+#define MM10_TITLE_LO 0x57525845u  /* 'WRXE' */
+
+static int ios_es_ioctlv(uint32_t cmd, uint32_t inc, uint32_t outc, uint32_t vec) {
+    if (cmd == 0x20 && inc == 0 && outc == 1) {            /* ES_GetTitleId(u64 *out) */
+        uint32_t out = MEM_R32(vec);
+        MEM_W32(out, MM10_TITLE_HI);
+        MEM_W32(out + 4, MM10_TITLE_LO);
+        printf("[IOS] ES_GetTitleId -> %08x-%08x\n", MM10_TITLE_HI, MM10_TITLE_LO);
+        fflush(stdout);
+        return 1;
+    }
+    if (cmd == 0x1d && inc == 1 && outc == 1) {            /* ES_GetDataDir(u64 titleID, char *out) */
+        uint32_t tid = MEM_R32(vec);
+        uint32_t hi = MEM_R32(tid), lo = MEM_R32(tid + 4);
+        uint32_t out = MEM_R32(vec + 8), len = MEM_R32(vec + 12);
+        char path[40];
+        snprintf(path, sizeof path, "/title/%08x/%08x/data", (unsigned)hi, (unsigned)lo);
+        for (uint32_t i = 0; i < len && i < 30u; ++i)
+            MEM_W8(out + i, i < strlen(path) ? (uint8_t)path[i] : 0);
+        printf("[IOS] ES_GetDataDir(%08x-%08x) -> %s\n", (unsigned)hi, (unsigned)lo, path);
+        fflush(stdout);
+        return 1;
+    }
+    return 0;
+}
+
 void hle_IOS_Ioctlv(void) { /* (fd, cmd, inCount, outCount, vec) */
     int32_t fd = (int32_t)g_cpu.gpr[3];
-    uint32_t inc = g_cpu.gpr[5], outc = g_cpu.gpr[6], vec = g_cpu.gpr[7];
-    printf("[IOS] ioctlv fd=%d (%s) cmd=0x%x in=%u out=%u\n", fd, ios_fd_path(fd),
-           (unsigned)g_cpu.gpr[4], (unsigned)inc, (unsigned)outc);
+    uint32_t cmd = g_cpu.gpr[4], inc = g_cpu.gpr[5], outc = g_cpu.gpr[6], vec = g_cpu.gpr[7];
+    const char *path = ios_fd_path(fd);
+    printf("[IOS] ioctlv fd=%d (%s) cmd=0x%x in=%u out=%u\n", fd, path,
+           (unsigned)cmd, (unsigned)inc, (unsigned)outc);
     fflush(stdout);
+    if (strcmp(path, "/dev/es") == 0 && ios_es_ioctlv(cmd, inc, outc, vec)) { ios_ret(0); return; }
     for (uint32_t i = inc; i < inc + outc && i < 16; ++i)
         ios_zero(MEM_R32(vec + 8u * i), MEM_R32(vec + 8u * i + 4u));
     ios_ret(0);

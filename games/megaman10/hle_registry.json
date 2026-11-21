@@ -18,5 +18,15 @@
   "0x8017eba0": "hle_IOS_Ioctlv",
   "0x8017dd50": "hle_IOS_OpenAsync",
   "0x8017e700": "hle_IOS_IoctlAsync",
-  "_ios": "IOS_* sincronas completam na hora (runtime/hle_ios.c); variantes Async param com mensagem."
+  "_ios": "IOS_* sincronas completam na hora (runtime/hle_ios.c); variantes Async param com mensagem.",
+  "0x8017dfa0": "hle_IOS_CloseAsync",
+  "0x8017e060": "hle_IOS_Close",
+  "0x8017e110": "hle_IOS_ReadAsync",
+  "0x8017e210": "hle_IOS_Read",
+  "0x8017e320": "hle_IOS_WriteAsync",
+  "0x8017e420": "hle_IOS_Write",
+  "0x8017e530": "hle_IOS_SeekAsync",
+  "0x8017e610": "hle_IOS_Seek",
+  "0x8017e840": "hle_IOS_Ioctl",
+  "0x8017eab0": "hle_IOS_IoctlvAsync"
 }
