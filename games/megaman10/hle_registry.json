@@ -28,5 +28,8 @@
   "0x8017e530": "hle_IOS_SeekAsync",
   "0x8017e610": "hle_IOS_Seek",
   "0x8017e840": "hle_IOS_Ioctl",
-  "0x8017eab0": "hle_IOS_IoctlvAsync"
+  "0x8017eab0": "hle_IOS_IoctlvAsync",
+  "0x8013de00": "hle_OSDisableInterrupts",
+  "0x8013de20": "hle_OSEnableInterrupts",
+  "0x8013de40": "hle_OSRestoreInterrupts"
 }
