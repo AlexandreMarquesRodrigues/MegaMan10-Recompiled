@@ -294,4 +294,86 @@ void hle_IOS_Seek(void) {   /* (fd, offset, whence) */
     ios_ret(pos);
 }
 
-void
+void hle_IOS_Ioctl(void) {  /* (fd, cmd, in, inLen, out, outLen) */
+    int32_t fd = (int32_t)g_cpu.gpr[3];
+    printf("[IOS] ioctl fd=%d (%s) cmd=0x%x in=%u out=%u\n", fd, ios_fd_path(fd),
+           (unsigned)g_cpu.gpr[4], (unsigned)g_cpu.gpr[6], (unsigned)g_cpu.gpr[8]);
+    fflush(stdout);
+    if (!vf_ioctl(fd, g_cpu.gpr[4], g_cpu.gpr[7])) ios_zero(g_cpu.gpr[7], g_cpu.gpr[8]);
+    ios_ret(0);
+}
+
+void hle_IOS_Ioctlv(void) { /* (fd, cmd, inCount, outCount, vec) */
+    ios_ioctlv_common((int32_t)g_cpu.gpr[3], g_cpu.gpr[4], g_cpu.gpr[5], g_cpu.gpr[6], g_cpu.gpr[7]);
+    ios_ret(0);
+}
+
+/* ---- chamadas assincronas: devolvem 0 e entregam o callback depois ------- */
+void hle_IOS_OpenAsync(void) {          /* (path, mode, cb, data) */
+    char path[96];
+    ios_read_cstr(g_cpu.gpr[3], path, sizeof path);
+    int32_t fd = ios_do_open(path);
+    printf("[IOS] openAsync \"%s\" mode=%u -> %d (cb=0x%08x)\n", path,
+           (unsigned)g_cpu.gpr[4], (int)fd, (unsigned)g_cpu.gpr[5]);
+    fflush(stdout);
+    ios_queue_cb(g_cpu.gpr[5], fd, g_cpu.gpr[6]);
+    ios_ret(0);
+}
+
+void hle_IOS_CloseAsync(void) {         /* (fd, cb, data) */
+    int32_t fd = (int32_t)g_cpu.gpr[3];
+    printf("[IOS] closeAsync fd=%d (%s)\n", fd, ios_fd_path(fd));
+    fflush(stdout);
+    ios_do_close(fd);
+    ios_queue_cb(g_cpu.gpr[4], 0, g_cpu.gpr[5]);
+    ios_ret(0);
+}
+
+void hle_IOS_ReadAsync(void) {          /* (fd, buf, len, cb, data) */
+    int32_t fd = (int32_t)g_cpu.gpr[3];
+    int32_t n = vf_read(fd, g_cpu.gpr[4], g_cpu.gpr[5]);
+    printf("[IOS] readAsync fd=%d (%s) len=%u -> %d\n", fd, ios_fd_path(fd), (unsigned)g_cpu.gpr[5], (int)n);
+    fflush(stdout);
+    ios_queue_cb(g_cpu.gpr[6], n, g_cpu.gpr[7]);
+    ios_ret(0);
+}
+
+void hle_IOS_WriteAsync(void) {         /* (fd, buf, len, cb, data) */
+    int32_t fd = (int32_t)g_cpu.gpr[3];
+    uint32_t len = g_cpu.gpr[5];
+    printf("[IOS] writeAsync fd=%d (%s) len=%u\n", fd, ios_fd_path(fd), (unsigned)len);
+    fflush(stdout);
+    ios_queue_cb(g_cpu.gpr[6], (int32_t)len, g_cpu.gpr[7]);
+    ios_ret(0);
+}
+
+void hle_IOS_SeekAsync(void) {          /* (fd, offset, whence, cb, data) */
+    int32_t fd = (int32_t)g_cpu.gpr[3];
+    int32_t pos = vf_seek(fd, (int32_t)g_cpu.gpr[4], (int32_t)g_cpu.gpr[5]);
+    printf("[IOS] seekAsync fd=%d (%s) -> %d\n", fd, ios_fd_path(fd), (int)pos);
+    fflush(stdout);
+    ios_queue_cb(g_cpu.gpr[6], pos, g_cpu.gpr[7]);
+    ios_ret(0);
+}
+
+void hle_IOS_IoctlAsync(void) {         /* (fd, cmd, in, inLen, out, outLen, cb, data) */
+    int32_t fd = (int32_t)g_cpu.gpr[3];
+    const char *path = ios_fd_path(fd);
+    printf("[IOS] ioctlAsync fd=%d (%s) cmd=0x%x in=%u out=%u cb=0x%08x\n", fd, path,
+           (unsigned)g_cpu.gpr[4], (unsigned)g_cpu.gpr[6], (unsigned)g_cpu.gpr[8],
+           (unsigned)g_cpu.gpr[9]);
+    fflush(stdout);
+    if (strcmp(path, "/dev/stm/eventhook") == 0) {   /* so responde quando o usuario aperta power/reset */
+        ios_ret(0);
+        return;
+    }
+    if (!vf_ioctl(fd, g_cpu.gpr[4], g_cpu.gpr[7])) ios_zero(g_cpu.gpr[7], g_cpu.gpr[8]);
+    ios_queue_cb(g_cpu.gpr[9], 0, g_cpu.gpr[10]);
+    ios_ret(0);
+}
+
+void hle_IOS_IoctlvAsync(void) {        /* (fd, cmd, inCount, outCount, vec, cb, data) */
+    ios_ioctlv_common((int32_t)g_cpu.gpr[3], g_cpu.gpr[4], g_cpu.gpr[5], g_cpu.gpr[6], g_cpu.gpr[7]);
+    ios_queue_cb(g_cpu.gpr[8], 0, g_cpu.gpr[9]);
+    ios_ret(0);
+}
