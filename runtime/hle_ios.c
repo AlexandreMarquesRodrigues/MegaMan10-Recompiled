@@ -378,11 +378,45 @@ void hle_IOS_IoctlvAsync(void) {        /* (fd, cmd, inCount, outCount, vec, cb,
     ios_ret(0);
 }
 
+
 /* ---- diagnostico: o jogo/SDK desistiu (OSFatal) ou vai encerrar ---------- */
+static void ios_dump_text(const char *tag, uint32_t va, int n) {
+    char buf[130];
+    int i;
+    for (i = 0; i < n && i < 128; ++i) {
+        unsigned c = MEM_R8(va + (uint32_t)i);
+        buf[i] = (c >= 32 && c < 127) ? (char)c : '.';
+    }
+    buf[i] = 0;
+    printf("[IOS]   %s @0x%08x: %s\n", tag, (unsigned)va, buf);
+}
+
+static uint32_t ios_find(const uint8_t *pat, size_t n) {
+    for (uint32_t a = 0x80000000u; a < 0x81800000u; ++a) {
+        size_t i = 0;
+        while (i < n && MEM_R8(a + (uint32_t)i) == pat[i]) ++i;
+        if (i == n) return a;
+    }
+    return 0;
+}
+
 void hle_OSFatal(void) {                /* (fg, bg, msg) */
-    char msg[200];
-    ios_read_cstr(g_cpu.gpr[5], msg, sizeof msg);
-    printf("[IOS] OSFatal: \"%s\" (LR=0x%08x)\n", msg, (unsigned)g_cpu.lr);
+    uint32_t r[4] = { g_cpu.gpr[3], g_cpu.gpr[4], g_cpu.gpr[5], g_cpu.gpr[6] };
+    char tag[16];
+    printf("[IOS] OSFatal LR=0x%08x r3=%08x r4=%08x r5=%08x r6=%08x\n",
+           (unsigned)g_cpu.lr, (unsigned)r[0], (unsigned)r[1], (unsigned)r[2], (unsigned)r[3]);
+    for (int i = 0; i < 4; ++i) {
+        if ((r[i] >= 0x80000000u && r[i] < 0x81800000u) || (r[i] >= 0x90000000u && r[i] < 0x94000000u)) {
+            snprintf(tag, sizeof tag, "texto em r%d", i + 3);
+            ios_dump_text(tag, r[i], 100);
+        }
+    }
+    static const uint8_t plain[] = { 'A', 'R', 'E', 'A', '=' };
+    uint32_t a = ios_find(plain, sizeof plain);
+    if (a) ios_dump_text("setting.txt DECIFRADO", a, 120);
+    else printf("[IOS]   'AREA=' nao existe na RAM\n");
+    a = ios_find(g_setting, 8);
+    if (a) ios_dump_text("setting.txt AINDA CIFRADO", a, 40);
     fflush(stdout);
     ppc_unimplemented("OSFatal", g_cpu.lr);
 }
