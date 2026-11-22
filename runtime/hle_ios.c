@@ -377,3 +377,19 @@ void hle_IOS_IoctlvAsync(void) {        /* (fd, cmd, inCount, outCount, vec, cb,
     ios_queue_cb(g_cpu.gpr[8], 0, g_cpu.gpr[9]);
     ios_ret(0);
 }
+
+/* ---- diagnostico: o jogo/SDK desistiu (OSFatal) ou vai encerrar ---------- */
+void hle_OSFatal(void) {                /* (fg, bg, msg) */
+    char msg[200];
+    ios_read_cstr(g_cpu.gpr[5], msg, sizeof msg);
+    printf("[IOS] OSFatal: \"%s\" (LR=0x%08x)\n", msg, (unsigned)g_cpu.lr);
+    fflush(stdout);
+    ppc_unimplemented("OSFatal", g_cpu.lr);
+}
+
+void hle_OSShutdownDevices(void) {      /* (evento) */
+    printf("[IOS] __OSShutdownDevices(evento=%u) LR=0x%08x\n",
+           (unsigned)g_cpu.gpr[3], (unsigned)g_cpu.lr);
+    fflush(stdout);
+    ppc_unimplemented("__OSShutdownDevices", g_cpu.lr);
+}
