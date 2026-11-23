@@ -5,10 +5,13 @@ if ($LASTEXITCODE -ne 0) { Write-Host "COMPILACAO FALHOU: me mande as linhas aci
 $log = "build\$Log.log"
 .\build\mm10.exe 2>&1 | Tee-Object -FilePath $log | Out-Null
 $r = "build\relatorio.txt"
-"=== IOS ===" | Set-Content $r
-Select-String -Path $log -Pattern '^\[IOS\]' | Select-Object -Last 40 | ForEach-Object Line | Add-Content $r
-"=== OSREPORT ===" | Add-Content $r
-Select-String -Path $log -Pattern '^\[OSReport\]' | Select-Object -Last 10 | ForEach-Object Line | Add-Content $r
+$ios = @(Select-String -Path $log -Pattern '^\[IOS\]' | ForEach-Object Line)
+"=== IOS (total $($ios.Count) linhas; primeiras 60 e ultimas 6) ===" | Set-Content $r
+$ios | Select-Object -First 60 | Add-Content $r
+"..." | Add-Content $r
+$ios | Select-Object -Last 6 | Add-Content $r
+"=== OSREPORT (ultimas 12) ===" | Add-Content $r
+Select-String -Path $log -Pattern '^\[OSReport\]' | Select-Object -Last 12 | ForEach-Object Line | Add-Content $r
 "=== PARADA ===" | Add-Content $r
-Select-String -Path $log -Pattern 'GUEST STOP' -Context 0,12 | ForEach-Object { $_.Line; $_.Context.PostContext } | Add-Content $r
+Select-String -Path $log -Pattern 'GUEST STOP' -Context 0,14 | ForEach-Object { $_.Line; $_.Context.PostContext } | Add-Content $r
 Get-Content $r

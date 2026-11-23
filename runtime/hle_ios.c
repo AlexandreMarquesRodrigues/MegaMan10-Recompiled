@@ -374,6 +374,16 @@ void hle_IOS_IoctlAsync(void) {         /* (fd, cmd, in, inLen, out, outLen, cb,
 
 void hle_IOS_IoctlvAsync(void) {        /* (fd, cmd, inCount, outCount, vec, cb, data) */
     ios_ioctlv_common((int32_t)g_cpu.gpr[3], g_cpu.gpr[4], g_cpu.gpr[5], g_cpu.gpr[6], g_cpu.gpr[7]);
+    {   /* USB/Bluetooth (/dev/usb/oh1/...): bulk (1) e interrupt (2) so completam com dados do Bluetooth: ficam pendentes */
+        const char *pth = ios_fd_path((int32_t)g_cpu.gpr[3]);
+        uint32_t ucmd = g_cpu.gpr[4];
+        if (strncmp(pth, "/dev/usb/oh1/", 13) == 0 && (ucmd == 1 || ucmd == 2)) {
+            static int once;
+            if (!once++) { printf("[IOS] USB/Bluetooth: bulk/interrupt ficam pendentes (sem Wii Remote ainda)\n"); fflush(stdout); }
+            ios_ret(0);
+            return;
+        }
+    }
     ios_queue_cb(g_cpu.gpr[8], 0, g_cpu.gpr[9]);
     ios_ret(0);
 }
