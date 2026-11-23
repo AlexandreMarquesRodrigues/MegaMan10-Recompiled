@@ -634,6 +634,7 @@ int main(void) {
     MEM_W32(0x80003138u, 0x00000011u);  /* versão do Hollywood */
     MEM_W32(0x80003140u, 0x00090204u);  /* versão do IOS (IOS9 2.4) */
     MEM_W32(0x80003144u, 0x00062507u);  /* data do build do IOS */
+    MEM_W32(0x80003188u, 0x00090204u);  /* IOS exigido pelo titulo: o OSInit confere contra 0x80003140 */
     if (entry != 0x80004050u) fprintf(stderr, "DOL entry is %08x; requested entry is 80004050\n", entry);
     g_cpu.gpr[1] = 0x817ff000u;
     g_cpu.gpr[2] = 0x803e0000u;
